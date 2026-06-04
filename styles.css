@@ -70,3 +70,316 @@
     font-size: var(--font-ui-small);
   }
 }
+
+.tradir-panel-modal-shell {
+  width: min(760px, 92vw);
+}
+
+.tradir-report-modal-shell {
+  width: min(1180px, 94vw);
+  max-height: 88vh;
+}
+
+.tradir-command-modal,
+.tradir-briefing-modal {
+  color: var(--text-normal);
+}
+
+.tradir-command-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.tradir-command-mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.tradir-command-header h2,
+.tradir-briefing-hero h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.tradir-command-header p,
+.tradir-briefing-hero p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+}
+
+.tradir-command-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tradir-action-tile {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  align-items: center;
+  gap: 12px;
+  min-height: 88px;
+  padding: 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tradir-action-tile:hover {
+  border-color: var(--interactive-accent);
+  background: var(--background-secondary-alt);
+}
+
+.tradir-action-tile.is-primary {
+  border-color: color-mix(in srgb, var(--interactive-accent) 55%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-secondary));
+}
+
+.tradir-action-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--interactive-accent);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.tradir-action-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tradir-action-copy strong {
+  font-size: var(--font-ui-medium);
+}
+
+.tradir-action-copy small,
+.tradir-command-meta {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.tradir-command-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.tradir-command-meta span {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.tradir-command-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.tradir-secondary-button {
+  border-radius: 6px;
+}
+
+.tradir-briefing-modal {
+  max-height: 78vh;
+  overflow: auto;
+}
+
+.tradir-briefing-hero {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tradir-briefing-eyebrow {
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.tradir-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.tradir-metric {
+  padding: 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.tradir-metric span {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.tradir-metric strong {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 20px;
+}
+
+.tradir-briefing-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.tradir-briefing-modal h3 {
+  margin: 0 0 10px;
+  font-size: var(--font-ui-medium);
+}
+
+.tradir-story-list {
+  display: grid;
+  gap: 10px;
+}
+
+.tradir-story {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-left: 4px solid var(--text-muted);
+  border-radius: 8px;
+  background: var(--background-primary);
+}
+
+.tradir-story.is-positive {
+  border-left-color: var(--color-green);
+}
+
+.tradir-story.is-negative {
+  border-left-color: var(--color-red);
+}
+
+.tradir-story.is-neutral {
+  border-left-color: var(--color-yellow);
+}
+
+.tradir-story-rank {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-weight: 800;
+}
+
+.tradir-story-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.tradir-story-meta span {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--background-secondary);
+}
+
+.tradir-story h4 {
+  margin: 6px 0;
+  line-height: 1.35;
+}
+
+.tradir-story p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.tradir-story-source {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.tradir-briefing-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tradir-mini-table,
+.tradir-report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-ui-small);
+}
+
+.tradir-mini-table th,
+.tradir-mini-table td,
+.tradir-report-table th,
+.tradir-report-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  vertical-align: top;
+}
+
+.tradir-mini-table th,
+.tradir-report-table th {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.tradir-full-list {
+  margin-top: 18px;
+}
+
+.tradir-report-table td:first-child,
+.tradir-report-table th:first-child {
+  text-align: right;
+}
+
+@media (max-width: 860px) {
+  .tradir-command-grid,
+  .tradir-metric-grid,
+  .tradir-briefing-body {
+    grid-template-columns: 1fr;
+  }
+
+  .tradir-story {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
+  .tradir-story-source {
+    grid-column: 2;
+  }
+}

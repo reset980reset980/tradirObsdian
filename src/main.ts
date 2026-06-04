@@ -1,5 +1,6 @@
 import {
   App,
+  Modal,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -200,8 +201,14 @@ export default class TradirObsdianPlugin extends Plugin {
     this.statusEl = this.addStatusBarItem();
     this.setStatus("Ready");
 
-    this.addRibbonIcon("newspaper", "Collect trading news", () => {
-      void this.collectLatestNews();
+    this.addRibbonIcon("newspaper", "Open Tradir panel", () => {
+      this.openCommandPanel();
+    });
+
+    this.addCommand({
+      id: "open-tradir-panel",
+      name: "Open Tradir command panel",
+      callback: () => this.openCommandPanel(),
     });
 
     this.addCommand({
@@ -268,6 +275,10 @@ export default class TradirObsdianPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+
+  openCommandPanel() {
+    new TradirCommandModal(this.app, this).open();
   }
 
   async testSources() {
@@ -380,6 +391,7 @@ export default class TradirObsdianPlugin extends Plugin {
       await this.refreshIndex();
       new Notice("Created trading news briefing.");
       this.setStatus("Briefing done");
+      new TradirBriefingModal(this.app, analyzed, this.settings).open();
     } catch (error) {
       this.handleError("Could not create briefing", error);
     }
@@ -1034,6 +1046,237 @@ class TradirSettingTab extends PluginSettingTab {
           .onClick(() => void this.plugin.createDailyBriefing()),
       );
   }
+}
+
+class TradirCommandModal extends Modal {
+  constructor(app: App, private plugin: TradirObsdianPlugin) {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    this.modalEl.addClass("tradir-panel-modal-shell");
+    contentEl.empty();
+    contentEl.addClass("tradir-command-modal");
+
+    const header = contentEl.createDiv({ cls: "tradir-command-header" });
+    header.createDiv({ cls: "tradir-command-mark", text: "TN" });
+    const title = header.createDiv();
+    title.createEl("h2", { text: "Tradir News Radar" });
+    title.createEl("p", { text: "뉴스 수집, 브리핑 생성, 연결 점검을 바로 실행합니다." });
+
+    const grid = contentEl.createDiv({ cls: "tradir-command-grid" });
+    this.addAction(grid, {
+      icon: "↧",
+      title: "뉴스 가져오기",
+      desc: "RSS를 수집하고 기사 노트를 생성",
+      primary: true,
+      run: async () => this.plugin.collectLatestNews(),
+    });
+    this.addAction(grid, {
+      icon: "◫",
+      title: "보고서 생성",
+      desc: "일일 브리핑 저장 후 HTML로 보기",
+      primary: true,
+      run: async () => this.plugin.createDailyBriefing(),
+    });
+    this.addAction(grid, {
+      icon: "✓",
+      title: "RSS 테스트",
+      desc: "첫 RSS 소스 연결 확인",
+      run: async () => this.plugin.testSources(),
+    });
+    this.addAction(grid, {
+      icon: "◇",
+      title: "AI 테스트",
+      desc: "키, 모델, 인증 상태 확인",
+      run: async () => this.plugin.testAiConnection(),
+    });
+
+    const meta = contentEl.createDiv({ cls: "tradir-command-meta" });
+    meta.createEl("span", { text: `Provider: ${this.plugin.settings.aiProvider}` });
+    meta.createEl("span", { text: `Model: ${this.plugin.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.plugin.settings.aiProvider] || "N/A"}` });
+    meta.createEl("span", { text: `Limit: ${this.plugin.settings.defaultLimit}` });
+
+    const footer = contentEl.createDiv({ cls: "tradir-command-footer" });
+    const settingsButton = footer.createEl("button", { cls: "tradir-secondary-button", text: "설정 열기" });
+    settingsButton.addEventListener("click", () => {
+      this.close();
+      openPluginSettings(this.app, this.plugin.manifest.id);
+    });
+    const closeButton = footer.createEl("button", { cls: "tradir-secondary-button", text: "닫기" });
+    closeButton.addEventListener("click", () => this.close());
+  }
+
+  private addAction(container: HTMLElement, action: {
+    icon: string;
+    title: string;
+    desc: string;
+    primary?: boolean;
+    run: () => Promise<void>;
+  }) {
+    const button = container.createEl("button", {
+      cls: `tradir-action-tile${action.primary ? " is-primary" : ""}`,
+    });
+    button.type = "button";
+    button.createEl("span", { cls: "tradir-action-icon", text: action.icon });
+    const copy = button.createEl("span", { cls: "tradir-action-copy" });
+    copy.createEl("strong", { text: action.title });
+    copy.createEl("small", { text: action.desc });
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.addClass("is-running");
+      try {
+        this.close();
+        await action.run();
+      } finally {
+        button.disabled = false;
+        button.removeClass("is-running");
+      }
+    });
+  }
+}
+
+class TradirBriefingModal extends Modal {
+  constructor(
+    app: App,
+    private articles: AnalyzedArticle[],
+    private settings: TradirSettings,
+  ) {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    this.modalEl.addClass("tradir-report-modal-shell");
+    contentEl.empty();
+    contentEl.addClass("tradir-briefing-modal");
+
+    const sorted = [...this.articles].sort((a, b) => b.importance - a.importance);
+    const sourceCount = new Set(sorted.map((article) => article.source)).size;
+    const highImpact = sorted.filter((article) => article.importance >= 4).length;
+    const model = this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider] || "N/A";
+
+    const header = contentEl.createDiv({ cls: "tradir-briefing-hero" });
+    const eyebrow = header.createDiv({ cls: "tradir-briefing-eyebrow", text: today() });
+    eyebrow.createSpan({ text: " · Trading News Briefing" });
+    header.createEl("h2", { text: "시장 뉴스 브리핑" });
+    header.createEl("p", { text: briefingLead(sorted) });
+
+    const metrics = header.createDiv({ cls: "tradir-metric-grid" });
+    addMetric(metrics, "기사", String(sorted.length));
+    addMetric(metrics, "출처", String(sourceCount));
+    addMetric(metrics, "고중요도", String(highImpact));
+    addMetric(metrics, "AI", this.settings.aiProvider === "none" ? "RSS" : model);
+
+    const body = contentEl.createDiv({ cls: "tradir-briefing-body" });
+    const left = body.createDiv({ cls: "tradir-briefing-main" });
+    left.createEl("h3", { text: "우선 확인 뉴스" });
+    const storyList = left.createDiv({ cls: "tradir-story-list" });
+    sorted.slice(0, 7).forEach((article, index) => addStory(storyList, article, index));
+
+    const side = body.createDiv({ cls: "tradir-briefing-side" });
+    side.createEl("h3", { text: "카테고리" });
+    const categoryTable = side.createEl("table", { cls: "tradir-mini-table" });
+    addTableHead(categoryTable, ["분류", "수", "평균"]);
+    addCategoryTableRows(categoryTable, sorted);
+
+    side.createEl("h3", { text: "실행 설정" });
+    const settingsTable = side.createEl("table", { cls: "tradir-mini-table" });
+    addKeyValueRow(settingsTable, "Provider", this.settings.aiProvider);
+    addKeyValueRow(settingsTable, "Model", model);
+    addKeyValueRow(settingsTable, "RSS limit", String(this.settings.defaultLimit));
+
+    const all = contentEl.createDiv({ cls: "tradir-full-list" });
+    all.createEl("h3", { text: "전체 뉴스" });
+    const table = all.createEl("table", { cls: "tradir-report-table" });
+    addTableHead(table, ["중요도", "감성", "카테고리", "제목", "출처"]);
+    const tbody = table.createEl("tbody");
+    sorted.forEach((article) => {
+      const row = tbody.createEl("tr");
+      row.createEl("td", { text: String(article.importance) });
+      row.createEl("td", { text: sentimentLabel(article.sentiment) });
+      row.createEl("td", { text: categoryLabel(article.category) });
+      const title = row.createEl("td");
+      if (article.url) {
+        const link = title.createEl("a", { text: article.title });
+        link.setAttr("href", article.url);
+        link.setAttr("target", "_blank");
+        link.setAttr("rel", "noopener");
+      } else {
+        title.setText(article.title);
+      }
+      row.createEl("td", { text: article.source });
+    });
+  }
+}
+
+function openPluginSettings(app: App, pluginId: string) {
+  const settingApp = (app as App & { setting?: { open: () => void; openTabById: (id: string) => void } }).setting;
+  if (!settingApp) return;
+  settingApp.open();
+  settingApp.openTabById(pluginId);
+}
+
+function addMetric(container: HTMLElement, label: string, value: string) {
+  const metric = container.createDiv({ cls: "tradir-metric" });
+  metric.createEl("span", { text: label });
+  metric.createEl("strong", { text: value });
+}
+
+function addStory(container: HTMLElement, article: AnalyzedArticle, index: number) {
+  const story = container.createDiv({ cls: `tradir-story is-${article.sentiment}` });
+  const rank = story.createDiv({ cls: "tradir-story-rank", text: String(index + 1) });
+  const content = story.createDiv({ cls: "tradir-story-content" });
+  const meta = content.createDiv({ cls: "tradir-story-meta" });
+  meta.createSpan({ text: categoryLabel(article.category) });
+  meta.createSpan({ text: importanceStars(article.importance) });
+  meta.createSpan({ text: sentimentLabel(article.sentiment) });
+  const title = content.createEl("h4");
+  if (article.url) {
+    const link = title.createEl("a", { text: article.title });
+    link.setAttr("href", article.url);
+    link.setAttr("target", "_blank");
+    link.setAttr("rel", "noopener");
+  } else {
+    title.setText(article.title);
+  }
+  content.createEl("p", { text: article.summary || article.description || "요약이 없습니다." });
+  const source = story.createDiv({ cls: "tradir-story-source", text: article.source });
+  source.setAttr("aria-label", "source");
+  rank.setAttr("aria-label", "rank");
+}
+
+function addTableHead(table: HTMLTableElement, headers: string[]) {
+  const thead = table.createEl("thead");
+  const row = thead.createEl("tr");
+  headers.forEach((header) => row.createEl("th", { text: header }));
+}
+
+function addCategoryTableRows(table: HTMLTableElement, articles: AnalyzedArticle[]) {
+  const tbody = table.createEl("tbody");
+  const groups = new Map<string, AnalyzedArticle[]>();
+  for (const article of articles) {
+    const key = article.category || "trading_other";
+    groups.set(key, [...(groups.get(key) || []), article]);
+  }
+  Array.from(groups.entries())
+    .sort((a, b) => b[1].length - a[1].length)
+    .forEach(([category, group]) => {
+      const avg = group.reduce((sum, article) => sum + article.importance, 0) / group.length;
+      const row = tbody.createEl("tr");
+      row.createEl("td", { text: categoryLabel(category) });
+      row.createEl("td", { text: String(group.length) });
+      row.createEl("td", { text: avg.toFixed(1) });
+    });
+}
+
+function addKeyValueRow(table: HTMLTableElement, key: string, value: string) {
+  let tbody = table.querySelector("tbody");
+  if (!tbody) tbody = table.createEl("tbody");
+  const row = tbody.createEl("tr");
+  row.createEl("th", { text: key });
+  row.createEl("td", { text: value });
 }
 
 function parseSources(text: string): FeedSource[] {

@@ -42,6 +42,7 @@ The build outputs `main.js` in the repository root for BRAT/release packaging.
 - **Create daily trading news briefing**
 - **Test RSS sources**
 - **Test AI connection**
+- **Open Tradir command panel**
 
 ## Notes
 
@@ -60,6 +61,8 @@ API keys are normalized before storage and requests, so accidental spaces, line 
 For OpenAI, **Test AI connection** first calls `/v1/models` to verify authentication before spending tokens on a briefing test. The settings screen also shows a masked key shape and length so users can tell whether the full key is actually stored.
 
 Briefing notes are formatted as clean Obsidian-native Markdown reports with a summary callout, compact metric tables, category distribution, priority story sections, and a full article table. The plugin adds a scoped `tradir-report` CSS class to generated notes.
+
+The ribbon icon opens a command panel for common work: news import, briefing generation, RSS check, AI check, and settings. After briefing generation, the plugin also opens a readable HTML report modal while still saving the Markdown report to the vault.
 
 When AI is enabled, the plugin calls the selected provider directly from Obsidian using the user's own key. API keys are stored in this vault's plugin data, so users should avoid syncing plugin data to places they do not trust.
 
