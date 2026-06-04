@@ -53,6 +53,7 @@ interface AnalyzedArticle extends FeedItem {
 }
 
 interface AiArticleResult {
+  [key: string]: unknown;
   url?: string;
   title?: string;
   summary?: string;
@@ -569,12 +570,12 @@ export default class TradirObsdianPlugin extends Plugin {
 
       return {
         ...article,
-        title: cleanText(ai.title || article.title),
-        summary: cleanText(ai.summary || article.summary),
-        category: normalizeCategory(ai.category || article.category),
-        importance: clampImportance(ai.importance),
-        sentiment: normalizeSentiment(ai.sentiment),
-        tags: Array.isArray(ai.tags) ? ai.tags.map(cleanText).filter(Boolean).slice(0, 8) : article.tags,
+        title: readAiString(ai, ["title", "translated_title", "translatedTitle", "korean_title", "koreanTitle", "headline"]) || article.title,
+        summary: readAiString(ai, ["summary", "translated_summary", "translatedSummary", "korean_summary", "koreanSummary", "description"]) || article.summary,
+        category: normalizeCategory(readAiString(ai, ["category", "sector", "topic"]) || article.category),
+        importance: clampImportance(readAiValue(ai, ["importance", "importance_score", "importanceScore", "score", "rating"])),
+        sentiment: normalizeSentiment(readAiValue(ai, ["sentiment", "sentiment_label", "sentimentLabel", "tone", "market_tone", "marketTone"])),
+        tags: readAiTags(ai) || article.tags,
       };
     });
   }
@@ -1290,14 +1291,14 @@ class TradirBriefingModal extends Modal {
     contentEl.empty();
     contentEl.addClass("tradir-briefing-modal");
 
-    const sorted = [...this.articles].sort((a, b) => b.importance - a.importance);
+    const sorted = [...this.articles].sort((a, b) => effectiveImportance(b) - effectiveImportance(a));
     const visible = this.activeCategory === "all"
       ? sorted
       : sorted.filter((article) => (article.category || "trading_other") === this.activeCategory);
     const searched = filterArticles(visible, this.searchQuery);
     const sourceCount = new Set(searched.map((article) => article.source)).size;
-    const highImpact = searched.filter((article) => article.importance >= 4).length;
-    const positiveCount = searched.filter((article) => article.sentiment === "positive").length;
+    const highImpact = searched.filter((article) => effectiveImportance(article) >= 4).length;
+    const positiveCount = searched.filter((article) => effectiveSentiment(article) === "positive").length;
     const positiveRate = searched.length ? Math.round((positiveCount / searched.length) * 100) : 0;
     this.page = Math.min(this.page, Math.max(0, Math.ceil(searched.length / this.pageSize) - 1));
     const modeArticles = this.getModeArticles(searched);
@@ -1328,25 +1329,27 @@ class TradirBriefingModal extends Modal {
     this.renderSearchControls(header, searched.length);
 
     if (this.activeMode === "dashboard") {
-      this.renderDashboard(main, searched, modeArticles, searched.length);
+      this.renderDashboard(main, searched);
     } else {
       this.renderFeed(main, modeArticles, searched.length);
     }
   }
 
-  private renderDashboard(container: HTMLElement, scopeArticles: AnalyzedArticle[], articles: AnalyzedArticle[], total: number) {
+  private renderDashboard(container: HTMLElement, scopeArticles: AnalyzedArticle[]) {
     const body = container.createDiv({ cls: "tradir-dashboard-view" });
     const focus = body.createDiv({ cls: "tradir-dashboard-focus" });
     focus.createEl("h3", { text: "브리핑" });
-    focus.createEl("p", { text: briefingLead(articles) });
+    focus.createEl("p", { text: briefingLead(scopeArticles) });
 
     const cards = body.createDiv({ cls: "tradir-dashboard-cards" });
     const topCategories = categoryCounts(scopeArticles).slice(0, 6);
-    topCategories.forEach(([category, count]) => addDashboardCard(cards, categoryLabel(category), `${count}건`));
+    topCategories.forEach(([category, count]) => {
+      addDashboardCard(cards, category, categoryLabel(category), `${count}건`, () => this.activateCategory(category, "feed"));
+    });
 
     const charts = body.createDiv({ cls: "tradir-chart-row" });
-    const positive = scopeArticles.filter((article) => article.sentiment === "positive").length;
-    const negative = scopeArticles.filter((article) => article.sentiment === "negative").length;
+    const positive = scopeArticles.filter((article) => effectiveSentiment(article) === "positive").length;
+    const negative = scopeArticles.filter((article) => effectiveSentiment(article) === "negative").length;
     const neutral = scopeArticles.length - positive - negative;
     const positiveRate = scopeArticles.length ? Math.round((positive / scopeArticles.length) * 100) : 0;
     addGauge(charts, "긍정 비율", positiveRate);
@@ -1356,13 +1359,6 @@ class TradirBriefingModal extends Modal {
     const categoryTable = summary.createEl("table", { cls: "tradir-mini-table" });
     addTableHead(categoryTable, ["관심 분야", "뉴스 수", "평균 중요도"]);
     addCategoryTableRows(categoryTable, scopeArticles);
-
-    const topNews = summary.createDiv({ cls: "tradir-dashboard-top-news" });
-    topNews.createEl("h3", { text: this.getSectionTitle(total) });
-    this.renderPager(topNews, total);
-    const list = topNews.createDiv({ cls: "tradir-story-list" });
-    articles.forEach((article, index) => addStory(list, article, this.page * this.pageSize + index));
-    this.renderPager(topNews, total);
   }
 
   private renderFeed(container: HTMLElement, articles: AnalyzedArticle[], total: number) {
@@ -1381,10 +1377,15 @@ class TradirBriefingModal extends Modal {
     });
     button.setAttr("style", `--tradir-category-color:${categoryColor(category)}`);
     button.addEventListener("click", () => {
-      this.activeCategory = category;
-      this.page = 0;
-      this.onOpen();
+      this.activateCategory(category, this.activeMode === "dashboard" ? "feed" : this.activeMode);
     });
+  }
+
+  private activateCategory(category: string, mode: RadarMode = this.activeMode) {
+    this.activeCategory = category;
+    this.activeMode = mode;
+    this.page = 0;
+    this.onOpen();
   }
 
   private addModeTab(container: HTMLElement, mode: RadarMode, label: string) {
@@ -1483,9 +1484,11 @@ function addMetric(container: HTMLElement, label: string, value: string) {
   metric.createEl("strong", { text: value });
 }
 
-function addDashboardCard(container: HTMLElement, label: string, value: string) {
-  const card = container.createDiv({ cls: "tradir-dashboard-card" });
-  card.setAttr("style", `--tradir-category-color:${categoryColor(labelToCategory(label))}`);
+function addDashboardCard(container: HTMLElement, category: string, label: string, value: string, onClick: () => void) {
+  const card = container.createEl("button", { cls: "tradir-dashboard-card" });
+  card.type = "button";
+  card.setAttr("style", `--tradir-category-color:${categoryColor(category)}`);
+  card.addEventListener("click", onClick);
   card.createEl("span", { text: label });
   card.createEl("strong", { text: value });
 }
@@ -1525,14 +1528,16 @@ function categoryCounts(articles: AnalyzedArticle[]): Array<[string, number]> {
 }
 
 function addStory(container: HTMLElement, article: AnalyzedArticle, index: number) {
-  const story = container.createDiv({ cls: `tradir-story is-${article.sentiment}` });
+  const sentiment = effectiveSentiment(article);
+  const importance = effectiveImportance(article);
+  const story = container.createDiv({ cls: `tradir-story is-${sentiment}` });
   story.setAttr("style", `--tradir-category-color:${categoryColor(article.category)}`);
   const rank = story.createDiv({ cls: "tradir-story-rank", text: String(index + 1) });
   const content = story.createDiv({ cls: "tradir-story-content" });
   const meta = content.createDiv({ cls: "tradir-story-meta" });
   meta.createSpan({ text: categoryLabel(article.category) });
-  meta.createSpan({ text: importanceStars(article.importance) });
-  meta.createSpan({ text: sentimentLabel(article.sentiment) });
+  meta.createSpan({ text: importanceStars(importance) });
+  meta.createSpan({ text: sentimentLabel(sentiment) });
   const title = content.createEl("h4");
   if (article.url) {
     const link = title.createEl("a", { text: article.title });
@@ -1549,7 +1554,7 @@ function addStory(container: HTMLElement, article: AnalyzedArticle, index: numbe
   const tags = content.createDiv({ cls: "tradir-story-tags" });
   article.tags.slice(0, 6).forEach((tag) => tags.createEl("span", { text: tag }));
   const side = story.createDiv({ cls: "tradir-story-side" });
-  side.createDiv({ cls: "tradir-story-stars", text: importanceStars(article.importance) });
+  side.createDiv({ cls: "tradir-story-stars", text: importanceStars(importance) });
   side.createDiv({ cls: "tradir-story-date", text: getDatePart(article.publishedAt) || "" });
   side.createEl("button", { cls: "tradir-card-button", text: "☆" });
   const source = side.createDiv({ cls: "tradir-story-source", text: article.source });
@@ -1573,7 +1578,7 @@ function addCategoryTableRows(table: HTMLTableElement, articles: AnalyzedArticle
   Array.from(groups.entries())
     .sort((a, b) => b[1].length - a[1].length)
     .forEach(([category, group]) => {
-      const avg = group.reduce((sum, article) => sum + article.importance, 0) / group.length;
+      const avg = group.reduce((sum, article) => sum + effectiveImportance(article), 0) / group.length;
       const row = tbody.createEl("tr");
       row.createEl("td", { text: categoryLabel(category) });
       row.createEl("td", { text: String(group.length) });
@@ -1710,6 +1715,17 @@ function fallbackAnalysis(item: FeedItem): AnalyzedArticle {
   };
 }
 
+function effectiveSentiment(article: AnalyzedArticle): Sentiment {
+  if (article.sentiment !== "neutral") return article.sentiment;
+  const inferred = inferSentiment(`${article.title} ${article.originalTitle} ${article.summary} ${article.description}`);
+  return inferred !== "neutral" ? inferred : article.sentiment;
+}
+
+function effectiveImportance(article: AnalyzedArticle): number {
+  const inferred = inferImportance(`${article.title} ${article.originalTitle} ${article.summary} ${article.description}`);
+  return article.importance === 3 ? Math.max(article.importance, inferred) : article.importance;
+}
+
 function buildAnalysisPrompt(items: FeedItem[], language: string): string {
   const compact = items.map((item) => ({
     url: item.url,
@@ -1747,6 +1763,32 @@ function parseAiResults(rawText: string): AiArticleResult[] {
   if (!match) return [];
   const parsed = tryParseJson(match[0]);
   return Array.isArray(parsed) ? parsed as AiArticleResult[] : [];
+}
+
+function readAiValue(item: AiArticleResult, keys: string[]): unknown {
+  for (const key of keys) {
+    const value = item[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return undefined;
+}
+
+function readAiString(item: AiArticleResult, keys: string[]): string {
+  const value = readAiValue(item, keys);
+  return cleanText(typeof value === "string" ? value : String(value || ""));
+}
+
+function readAiTags(item: AiArticleResult): string[] | null {
+  const value = readAiValue(item, ["tags", "keywords", "tag"]);
+  if (Array.isArray(value)) {
+    const tags = value.map(cleanText).filter(Boolean).slice(0, 8);
+    return tags.length ? tags : null;
+  }
+  if (typeof value === "string") {
+    const tags = value.split(/[,#/]/).map(cleanText).filter(Boolean).slice(0, 8);
+    return tags.length ? tags : null;
+  }
+  return null;
 }
 
 function tryParseJson(text: string): unknown {
@@ -1842,12 +1884,6 @@ function categoryLabel(category: string): string {
     trading_other: "기타",
   };
   return labels[category] || category || "기타";
-}
-
-function labelToCategory(label: string): string {
-  const clean = cleanText(label);
-  const labels = ["crypto", "us_stock", "kr_stock", "macro", "rates", "fx", "commodity", "regulation", "trading_other"];
-  return labels.find((category) => categoryLabel(category) === clean) || normalizeCategory(clean);
 }
 
 function categoryColor(category: string): string {
@@ -1989,6 +2025,11 @@ function parseStoredArticle(text: string, file: TFile): AnalyzedArticle | null {
   const summary = cleanText(extractStoredSummary(text) || extractStoredSection(text, "RSS 발췌") || title);
   const description = cleanText(extractStoredSection(text, "RSS 발췌") || summary);
   const tags = parseYamlTags(readYamlRaw(yaml, "tags")).filter((tag) => !["trading-news", category].includes(tag)).slice(0, 8);
+  const analysisText = `${title} ${originalTitle} ${summary} ${description}`;
+  const restoredSentiment = normalizeSentiment(readYamlScalar(yaml, "sentiment"));
+  const inferredSentiment = inferSentiment(analysisText);
+  const restoredImportance = clampImportance(readYamlScalar(yaml, "importance"));
+  const inferredImportance = inferImportance(analysisText);
 
   return {
     id: hashString(`${source}:${url || title}`),
@@ -2001,8 +2042,8 @@ function parseStoredArticle(text: string, file: TFile): AnalyzedArticle | null {
     originalDescription: description,
     summary,
     category,
-    importance: clampImportance(readYamlScalar(yaml, "importance")),
-    sentiment: normalizeSentiment(readYamlScalar(yaml, "sentiment")),
+    importance: restoredImportance === 3 ? Math.max(restoredImportance, inferredImportance) : restoredImportance,
+    sentiment: restoredSentiment === "neutral" && inferredSentiment !== "neutral" ? inferredSentiment : restoredSentiment,
     tags: tags.length ? tags : buildTags(`${title} ${summary}`),
   };
 }
@@ -2095,7 +2136,7 @@ function inferCategory(text: string): string {
 function inferImportance(text: string): number {
   const lower = text.toLowerCase();
   let score = 2;
-  if (/(breaking|urgent|surge|plunge|crash|rally|record|war|attack|tariff|sanction|lawsuit|sec|fed|fomc|inflation|rate cut|rate hike|etf|approval)/.test(lower)) score += 2;
+  if (/(breaking|urgent|surge|plunge|crash|rally|record|breakout|all-time|ath|war|attack|tariff|sanction|lawsuit|sec|fed|fomc|inflation|rate cut|rate hike|etf|approval|최고|신고가|돌파|급등|급락|승인|경고)/.test(lower)) score += 2;
   if (/(bitcoin|ethereum|nasdaq|s&p|dow|oil|gold|dollar|treasury|yield|cpi|jobs|earnings)/.test(lower)) score += 1;
   if (/(minor|preview|opinion|explainer|recap)/.test(lower)) score -= 1;
   return Math.min(5, Math.max(1, score));
@@ -2103,8 +2144,8 @@ function inferImportance(text: string): number {
 
 function inferSentiment(text: string): Sentiment {
   const lower = text.toLowerCase();
-  const positive = /(surge|rally|gain|rise|jump|record high|approval|beat|bull|optimis|inflow|growth|recover|soar|상승|급등|호재|승인|회복|강세|긍정)/.test(lower);
-  const negative = /(drop|fall|slump|plunge|crash|loss|miss|risk|warning|lawsuit|ban|hack|war|attack|tariff|recession|bear|하락|급락|악재|경고|소송|금지|침체|부정)/.test(lower);
+  const positive = /(surge|rally|gain|gains|rise|rises|rose|jump|jumps|record high|all-time high|ath|approval|approved|beat|beats|bull|bullish|optimis|inflow|growth|recover|recovery|soar|soars|breakout|breaks above|상승|급등|호재|승인|회복|반등|강세|긍정|최고|신고가|돌파|개선|완화|유입|랠리)/.test(lower);
+  const negative = /(drop|drops|fall|falls|fell|slump|plunge|crash|loss|losses|miss|risk|warning|lawsuit|ban|hack|war|attack|tariff|recession|bear|bearish|outflow|하락|급락|악재|경고|소송|금지|침체|부정|위험|유출|약세|충돌)/.test(lower);
   if (positive && !negative) return "positive";
   if (negative && !positive) return "negative";
   if (positive && negative) return "neutral";
