@@ -422,7 +422,8 @@ export default class TradirObsdianPlugin extends Plugin {
         return;
       }
 
-      const analyzed = await this.analyzeItems(items);
+      const requireAi = this.settings.aiProvider !== "none" && Boolean(normalizeApiKey(this.settings.apiKey));
+      const analyzed = await this.analyzeItems(items, !requireAi);
       await this.ensureFolder(`${this.settings.outputFolder}/Articles`);
       await this.ensureFolder(`${this.settings.outputFolder}/Briefings`);
       for (const article of analyzed) {
@@ -1299,7 +1300,7 @@ class TradirBriefingModal extends Modal {
     const sourceCount = new Set(searched.map((article) => article.source)).size;
     const highImpact = searched.filter((article) => effectiveImportance(article) >= 4).length;
     const positiveCount = searched.filter((article) => effectiveSentiment(article) === "positive").length;
-    const positiveRate = searched.length ? Math.round((positiveCount / searched.length) * 100) : 0;
+    const positiveRate = formatPercent(positiveCount, searched.length);
     this.page = Math.min(this.page, Math.max(0, Math.ceil(searched.length / this.pageSize) - 1));
     const modeArticles = this.getModeArticles(searched);
 
@@ -1313,7 +1314,7 @@ class TradirBriefingModal extends Modal {
 
     const metrics = header.createDiv({ cls: "tradir-metric-grid" });
     addMetric(metrics, "기사", String(searched.length));
-    addMetric(metrics, "긍정", `${positiveRate}%`);
+    addMetric(metrics, "긍정", positiveRate.label);
     addMetric(metrics, "고중요도", String(highImpact));
     addMetric(metrics, "소스", String(sourceCount));
 
@@ -1351,8 +1352,8 @@ class TradirBriefingModal extends Modal {
     const positive = scopeArticles.filter((article) => effectiveSentiment(article) === "positive").length;
     const negative = scopeArticles.filter((article) => effectiveSentiment(article) === "negative").length;
     const neutral = scopeArticles.length - positive - negative;
-    const positiveRate = scopeArticles.length ? Math.round((positive / scopeArticles.length) * 100) : 0;
-    addGauge(charts, "긍정 비율", positiveRate);
+    const positiveRate = formatPercent(positive, scopeArticles.length);
+    addGauge(charts, "긍정 비율", positiveRate.value, positiveRate.label);
     addDonut(charts, positive, neutral, negative);
 
     const summary = body.createDiv({ cls: "tradir-dashboard-summary" });
@@ -1493,45 +1494,47 @@ function addDashboardCard(container: HTMLElement, category: string, label: strin
   card.createEl("strong", { text: value });
 }
 
-function addGauge(container: HTMLElement, label: string, value: number) {
+function addGauge(container: HTMLElement, label: string, value: number, displayValue = `${value}%`) {
   const card = container.createDiv({ cls: "tradir-chart-card" });
   card.createEl("h3", { text: label });
+  const summary = card.createDiv({ cls: "tradir-chart-summary is-above" });
+  summary.createEl("strong", { text: displayValue });
+  summary.createEl("span", { text: "긍정 기사 비율" });
   const gauge = card.createDiv({ cls: "tradir-gauge" });
   const safeValue = Math.max(0, Math.min(100, value));
   gauge.setAttr("style", `--angle:${safeValue * 1.8}deg`);
-  gauge.setAttr("title", `${label}: ${safeValue}%`);
-  gauge.createDiv({ cls: "tradir-gauge-value", text: `${value}%` });
-  const summary = card.createDiv({ cls: "tradir-chart-summary" });
-  summary.createEl("strong", { text: `${safeValue}%` });
-  summary.createEl("span", { text: "긍정 기사 비율" });
+  gauge.setAttr("title", `${label}: ${displayValue}`);
+  gauge.createDiv({ cls: "tradir-gauge-value", text: displayValue });
   addChartTooltip(card, [
-    [label, `${safeValue}%`],
-    ["중립/부정 포함", `${100 - safeValue}%`],
+    [label, displayValue],
+    ["중립/부정 포함", formatPercentLabel(100 - safeValue)],
   ]);
 }
 
 function addDonut(container: HTMLElement, positive: number, neutral: number, negative: number) {
   const total = Math.max(1, positive + neutral + negative);
-  const pos = Math.round((positive / total) * 100);
-  const neu = Math.round((neutral / total) * 100);
-  const neg = Math.max(0, 100 - pos - neu);
+  const pos = formatPercent(positive, total);
+  const neu = formatPercent(neutral, total);
+  const neg = formatPercent(negative, total);
+  const posEnd = pos.value;
+  const neuEnd = Math.min(100, pos.value + neu.value);
   const card = container.createDiv({ cls: "tradir-chart-card" });
   card.createEl("h3", { text: "감성 분포" });
-  const donut = card.createDiv({ cls: "tradir-donut" });
-  donut.setAttr("style", `--pos-end:${pos}%;--neu-end:${pos + neu}%`);
-  donut.setAttr("title", `긍정 ${positive}건 (${pos}%), 중립 ${neutral}건 (${neu}%), 부정 ${negative}건 (${neg}%)`);
-  donut.createDiv({ cls: "tradir-donut-hole", text: `${pos}%` });
-  const legend = card.createDiv({ cls: "tradir-donut-legend" });
-  legend.createEl("span", { text: `긍정 ${pos}%` });
-  legend.createEl("span", { text: `중립 ${neu}%` });
-  legend.createEl("span", { text: `부정 ${neg}%` });
-  const summary = card.createDiv({ cls: "tradir-chart-summary" });
-  summary.createEl("strong", { text: `긍정 ${pos}% · 중립 ${neu}% · 부정 ${neg}%` });
+  const summary = card.createDiv({ cls: "tradir-chart-summary is-above" });
+  summary.createEl("strong", { text: `긍정 ${pos.label} · 중립 ${neu.label} · 부정 ${neg.label}` });
   summary.createEl("span", { text: `${positive + neutral + negative}건 기준` });
+  const donut = card.createDiv({ cls: "tradir-donut" });
+  donut.setAttr("style", `--pos-end:${posEnd}%;--neu-end:${neuEnd}%`);
+  donut.setAttr("title", `긍정 ${positive}건 (${pos.label}), 중립 ${neutral}건 (${neu.label}), 부정 ${negative}건 (${neg.label})`);
+  donut.createDiv({ cls: "tradir-donut-hole", text: pos.label });
+  const legend = card.createDiv({ cls: "tradir-donut-legend" });
+  legend.createEl("span", { text: `긍정 ${pos.label}` });
+  legend.createEl("span", { text: `중립 ${neu.label}` });
+  legend.createEl("span", { text: `부정 ${neg.label}` });
   addChartTooltip(card, [
-    ["긍정", `${positive}건 · ${pos}%`],
-    ["중립", `${neutral}건 · ${neu}%`],
-    ["부정", `${negative}건 · ${neg}%`],
+    ["긍정", `${positive}건 · ${pos.label}`],
+    ["중립", `${neutral}건 · ${neu.label}`],
+    ["부정", `${negative}건 · ${neg.label}`],
   ]);
 }
 
@@ -1551,6 +1554,20 @@ function categoryCounts(articles: AnalyzedArticle[]): Array<[string, number]> {
     counts.set(key, (counts.get(key) || 0) + 1);
   });
   return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+}
+
+function formatPercent(count: number, total: number): { value: number; label: string } {
+  if (!total || count <= 0) return { value: 0, label: "0%" };
+  const raw = (count / total) * 100;
+  const value = Math.max(0.1, Math.round(raw * 10) / 10);
+  return {
+    value,
+    label: raw < 1 ? "<1%" : formatPercentLabel(value),
+  };
+}
+
+function formatPercentLabel(value: number): string {
+  return Number.isInteger(value) ? `${value}%` : `${value.toFixed(1)}%`;
 }
 
 function addStory(container: HTMLElement, article: AnalyzedArticle, index: number) {

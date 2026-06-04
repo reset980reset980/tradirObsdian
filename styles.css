@@ -644,7 +644,7 @@
   position: relative;
   width: min(360px, 100%);
   aspect-ratio: 2 / 1;
-  margin: 28px auto 0;
+  margin: 12px auto 0;
   overflow: hidden;
   border-radius: 999px 999px 0 0;
   background:
@@ -704,6 +704,11 @@
   margin-top: 10px;
   color: var(--text-muted);
   font-size: var(--font-ui-small);
+}
+
+.tradir-chart-summary.is-above {
+  margin-top: 4px;
+  margin-bottom: 8px;
 }
 
 .tradir-chart-summary strong {
