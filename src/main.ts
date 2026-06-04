@@ -12,6 +12,7 @@ import {
 
 type AiProvider = "none" | "openai" | "anthropic" | "gemini";
 type Sentiment = "positive" | "neutral" | "negative";
+type PresetTier = "lowest" | "balanced" | "latest";
 
 interface TradirSettings {
   outputFolder: string;
@@ -61,6 +62,17 @@ interface OpenAIChatAttempt {
   payload: Record<string, unknown>;
 }
 
+interface ModelPreset {
+  provider: Exclude<AiProvider, "none">;
+  tier: PresetTier;
+  model: string;
+  label: string;
+  inputUsdPerMTok: number;
+  outputUsdPerMTok: number;
+  note: string;
+  source: string;
+}
+
 const DEFAULT_SOURCES = [
   "CoinDesk|https://www.coindesk.com/arc/outboundfeeds/rss",
   "Cointelegraph|https://cointelegraph.com/rss",
@@ -81,10 +93,103 @@ const DEFAULT_SETTINGS: TradirSettings = {
 
 const PROVIDER_DEFAULT_MODELS: Record<AiProvider, string> = {
   none: "",
-  openai: "gpt-4.1-mini",
-  anthropic: "claude-sonnet-4-20250514",
-  gemini: "gemini-2.5-flash",
+  openai: "gpt-5.4-nano",
+  anthropic: "claude-haiku-4-5-20251001",
+  gemini: "gemini-2.5-flash-lite",
 };
+
+const MODEL_PRESETS: ModelPreset[] = [
+  {
+    provider: "openai",
+    tier: "lowest",
+    model: "gpt-5.4-nano",
+    label: "Lowest cost - GPT-5.4 nano",
+    inputUsdPerMTok: 0.20,
+    outputUsdPerMTok: 1.25,
+    note: "Best default for RSS summarization and classification when cost matters.",
+    source: "OpenAI pricing, 2026-06",
+  },
+  {
+    provider: "openai",
+    tier: "balanced",
+    model: "gpt-5.4-mini",
+    label: "Balanced - GPT-5.4 mini",
+    inputUsdPerMTok: 0.75,
+    outputUsdPerMTok: 4.50,
+    note: "Stronger reasoning than nano while still much cheaper than frontier models.",
+    source: "OpenAI pricing, 2026-06",
+  },
+  {
+    provider: "openai",
+    tier: "latest",
+    model: "gpt-5.5",
+    label: "Latest frontier - GPT-5.5",
+    inputUsdPerMTok: 5.00,
+    outputUsdPerMTok: 30.00,
+    note: "Use only when briefing quality matters more than token cost.",
+    source: "OpenAI pricing, 2026-06",
+  },
+  {
+    provider: "anthropic",
+    tier: "lowest",
+    model: "claude-haiku-4-5-20251001",
+    label: "Lowest cost - Claude Haiku 4.5",
+    inputUsdPerMTok: 1.00,
+    outputUsdPerMTok: 5.00,
+    note: "Fastest Claude option and the practical default for news triage.",
+    source: "Anthropic pricing, 2026-06",
+  },
+  {
+    provider: "anthropic",
+    tier: "balanced",
+    model: "claude-sonnet-4-6",
+    label: "Balanced - Claude Sonnet 4.6",
+    inputUsdPerMTok: 3.00,
+    outputUsdPerMTok: 15.00,
+    note: "Best Claude price/performance tier for deeper market interpretation.",
+    source: "Anthropic pricing, 2026-06",
+  },
+  {
+    provider: "anthropic",
+    tier: "latest",
+    model: "claude-opus-4-8",
+    label: "Latest frontier - Claude Opus 4.8",
+    inputUsdPerMTok: 5.00,
+    outputUsdPerMTok: 25.00,
+    note: "Most capable Claude option for complex reasoning; expensive for routine RSS.",
+    source: "Anthropic pricing, 2026-06",
+  },
+  {
+    provider: "gemini",
+    tier: "lowest",
+    model: "gemini-2.5-flash-lite",
+    label: "Lowest cost - Gemini 2.5 Flash-Lite",
+    inputUsdPerMTok: 0.10,
+    outputUsdPerMTok: 0.40,
+    note: "Cheapest listed option among supported providers for this plugin.",
+    source: "Google AI pricing, 2026-06",
+  },
+  {
+    provider: "gemini",
+    tier: "balanced",
+    model: "gemini-2.5-flash",
+    label: "Balanced - Gemini 2.5 Flash",
+    inputUsdPerMTok: 0.30,
+    outputUsdPerMTok: 2.50,
+    note: "Good balance for multilingual briefings with low cost.",
+    source: "Google AI pricing, 2026-06",
+  },
+  {
+    provider: "gemini",
+    tier: "latest",
+    model: "gemini-2.5-pro",
+    label: "Performance - Gemini 2.5 Pro",
+    inputUsdPerMTok: 1.25,
+    outputUsdPerMTok: 10.00,
+    note: "Use for complex reasoning; price shown for prompts up to 200k tokens.",
+    source: "Google AI pricing, 2026-06",
+  },
+];
 
 export default class TradirObsdianPlugin extends Plugin {
   settings: TradirSettings;
@@ -117,6 +222,12 @@ export default class TradirObsdianPlugin extends Plugin {
       callback: () => void this.testSources(),
     });
 
+    this.addCommand({
+      id: "test-ai-connection",
+      name: "Test AI connection",
+      callback: () => void this.testAiConnection(),
+    });
+
     this.addSettingTab(new TradirSettingTab(this.app, this));
   }
 
@@ -126,19 +237,32 @@ export default class TradirObsdianPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    let changed = false;
     if (this.settings.sourceText.includes("https://finance.yahoo.com/news/rssindex")) {
       this.settings.sourceText = this.settings.sourceText.replace(
         /Yahoo Finance\|https:\/\/finance\.yahoo\.com\/news\/rssindex/g,
         "MarketWatch|https://feeds.marketwatch.com/marketwatch/topstories/",
       );
-      await this.saveSettings();
+      changed = true;
     }
-    if (this.settings.aiProvider === "openai" && this.settings.aiModel === "gpt-5") {
+    if (this.settings.aiProvider === "openai" && ["gpt-5", "gpt-4.1-mini"].includes(this.settings.aiModel)) {
       this.settings.aiModel = PROVIDER_DEFAULT_MODELS.openai;
-      await this.saveSettings();
+      changed = true;
+    }
+    if (this.settings.aiProvider === "anthropic" && this.settings.aiModel === "claude-sonnet-4-20250514") {
+      this.settings.aiModel = PROVIDER_DEFAULT_MODELS.anthropic;
+      changed = true;
+    }
+    if (this.settings.aiProvider === "gemini" && this.settings.aiModel === "gemini-2.5-flash") {
+      this.settings.aiModel = PROVIDER_DEFAULT_MODELS.gemini;
+      changed = true;
     }
     if (!this.settings.aiModel) {
       this.settings.aiModel = PROVIDER_DEFAULT_MODELS[this.settings.aiProvider] || "";
+      changed = true;
+    }
+    if (changed) {
+      await this.saveSettings();
     }
   }
 
@@ -160,6 +284,38 @@ export default class TradirObsdianPlugin extends Plugin {
       this.setStatus("RSS OK");
     } catch (error) {
       this.handleError("RSS test failed", error);
+    }
+  }
+
+  async testAiConnection() {
+    try {
+      this.setStatus("Testing AI");
+      if (this.settings.aiProvider === "none") {
+        throw new Error("AI provider is None. Choose a provider first.");
+      }
+      const keyWarning = likelyKeyProviderWarning(this.settings.aiProvider, this.settings.apiKey);
+      if (keyWarning) {
+        throw new Error(keyWarning);
+      }
+
+      const sample: FeedItem = {
+        id: "test",
+        source: "Tradir test",
+        title: "S&P 500 futures edge higher before inflation data",
+        url: "https://example.com/tradir-ai-test",
+        description: "A short connection test item for market news classification.",
+        publishedAt: new Date().toISOString(),
+      };
+      const rawText = await this.callAi(buildAnalysisPrompt([sample], this.settings.language), 350);
+      const parsed = parseAiResults(rawText);
+      if (!parsed.length) {
+        throw new Error("AI connected, but the response was not valid briefing JSON.");
+      }
+      const model = this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider];
+      new Notice(`AI connection OK: ${this.settings.aiProvider} / ${model}`);
+      this.setStatus("AI OK");
+    } catch (error) {
+      this.handleError("AI connection failed", error);
     }
   }
 
@@ -263,7 +419,7 @@ export default class TradirObsdianPlugin extends Plugin {
     let parsed: AiArticleResult[] = [];
     try {
       const prompt = buildAnalysisPrompt(items, this.settings.language);
-      const rawText = await this.callAi(prompt);
+      const rawText = await this.callAi(prompt, this.settings.maxOutputTokens);
       parsed = parseAiResults(rawText);
       if (!parsed.length) {
         throw new Error("AI response did not contain a JSON array.");
@@ -292,23 +448,27 @@ export default class TradirObsdianPlugin extends Plugin {
     });
   }
 
-  private async callAi(prompt: string): Promise<string> {
+  private async callAi(prompt: string, maxOutputTokens = this.settings.maxOutputTokens): Promise<string> {
     const provider = this.settings.aiProvider;
     const model = this.settings.aiModel || PROVIDER_DEFAULT_MODELS[provider];
+    const keyWarning = likelyKeyProviderWarning(provider, this.settings.apiKey);
+    if (keyWarning) {
+      throw new Error(keyWarning);
+    }
 
     if (provider === "openai") {
-      return this.callOpenAI(model, prompt);
+      return this.callOpenAI(model, prompt, maxOutputTokens);
     }
     if (provider === "anthropic") {
-      return this.callAnthropic(model, prompt);
+      return this.callAnthropic(model, prompt, maxOutputTokens);
     }
     if (provider === "gemini") {
-      return this.callGemini(model, prompt);
+      return this.callGemini(model, prompt, maxOutputTokens);
     }
     throw new Error(`Unsupported AI provider: ${provider}`);
   }
 
-  private async callOpenAI(model: string, prompt: string): Promise<string> {
+  private async callOpenAI(model: string, prompt: string, maxOutputTokens: number): Promise<string> {
     const messages = [
       {
         role: "system",
@@ -323,13 +483,13 @@ export default class TradirObsdianPlugin extends Plugin {
     const completionTokenPayload = {
       model,
       messages,
-      max_completion_tokens: this.settings.maxOutputTokens,
+      max_completion_tokens: maxOutputTokens,
     };
 
     const legacyTokenPayload = {
       model,
       messages,
-      max_tokens: this.settings.maxOutputTokens,
+      max_tokens: maxOutputTokens,
     };
     const attempts: OpenAIChatAttempt[] = [
       {
@@ -394,7 +554,7 @@ export default class TradirObsdianPlugin extends Plugin {
     });
   }
 
-  private async callAnthropic(model: string, prompt: string): Promise<string> {
+  private async callAnthropic(model: string, prompt: string, maxOutputTokens: number): Promise<string> {
     const response = await requestUrl({
       url: "https://api.anthropic.com/v1/messages",
       method: "POST",
@@ -405,7 +565,7 @@ export default class TradirObsdianPlugin extends Plugin {
       },
       body: JSON.stringify({
         model,
-        max_tokens: this.settings.maxOutputTokens,
+        max_tokens: maxOutputTokens,
         messages: [{ role: "user", content: prompt }],
       }),
       throw: false,
@@ -416,7 +576,7 @@ export default class TradirObsdianPlugin extends Plugin {
     return extractAnthropicText(json);
   }
 
-  private async callGemini(model: string, prompt: string): Promise<string> {
+  private async callGemini(model: string, prompt: string, maxOutputTokens: number): Promise<string> {
     const safeModel = model.startsWith("models/") ? model : `models/${model}`;
     const response = await requestUrl({
       url: `https://generativelanguage.googleapis.com/v1beta/${safeModel}:generateContent?key=${encodeURIComponent(this.settings.apiKey.trim())}`,
@@ -428,7 +588,7 @@ export default class TradirObsdianPlugin extends Plugin {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           responseMimeType: "application/json",
-          maxOutputTokens: this.settings.maxOutputTokens,
+          maxOutputTokens,
         },
       }),
       throw: false,
@@ -497,9 +657,11 @@ export default class TradirObsdianPlugin extends Plugin {
     const negativeCount = sorted.filter((article) => article.sentiment === "negative").length;
     const positiveCount = sorted.filter((article) => article.sentiment === "positive").length;
     const neutralCount = sorted.filter((article) => article.sentiment === "neutral").length;
+    const selectedModel = this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider];
+    const selectedPreset = findPreset(this.settings.aiProvider, selectedModel);
     const aiLabel = this.settings.aiProvider === "none"
       ? "RSS only, tokens 0"
-      : `${this.settings.aiProvider} / ${this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider]}`;
+      : `${this.settings.aiProvider} / ${selectedModel}`;
     const lines = [
       "---",
       `title: "Trading News Briefing - ${date}"`,
@@ -561,7 +723,8 @@ export default class TradirObsdianPlugin extends Plugin {
       "|---|---|",
       `| RSS 처리 한도 | ${this.settings.defaultLimit} |`,
       `| AI Provider | ${this.settings.aiProvider} |`,
-      `| Model | ${this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider] || "N/A"} |`,
+      `| Model | ${selectedModel || "N/A"} |`,
+      `| Model cost note | ${tableCell(formatPresetDetails(selectedPreset))} |`,
       `| Output tokens | ${this.settings.maxOutputTokens} |`,
       "",
     );
@@ -715,8 +878,37 @@ class TradirSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Recommended model preset")
+      .setDesc(this.plugin.settings.aiProvider === "none"
+        ? "Choose an AI provider first. RSS-only mode uses zero tokens."
+        : "Current official list-price snapshot from June 2026. Prices are per 1M tokens and may change.")
+      .addDropdown((dropdown) => {
+        const presets = getProviderPresets(this.plugin.settings.aiProvider);
+        const currentModel = this.plugin.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.plugin.settings.aiProvider];
+        if (!presets.length) {
+          dropdown.addOption("none", "None - RSS only");
+        } else {
+          if (!presets.some((preset) => preset.model === currentModel)) {
+            dropdown.addOption("__custom__", `Custom - ${currentModel || "manual model"}`);
+          }
+          presets.forEach((preset) => dropdown.addOption(preset.model, formatPresetLabel(preset)));
+        }
+        dropdown
+          .setValue(presets.some((preset) => preset.model === currentModel) ? currentModel : "__custom__")
+          .onChange(async (value) => {
+            if (value === "__custom__" || value === "none") return;
+            this.plugin.settings.aiModel = value;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
+    new Setting(containerEl)
       .setName("AI model")
-      .setDesc("Provider model ID. You can replace the preset with any model your account supports.")
+      .setDesc(formatPresetDetails(findPreset(
+        this.plugin.settings.aiProvider,
+        this.plugin.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.plugin.settings.aiProvider],
+      )))
       .addText((text) =>
         text
           .setPlaceholder(PROVIDER_DEFAULT_MODELS[this.plugin.settings.aiProvider])
@@ -778,6 +970,15 @@ class TradirSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("AI check")
+      .setDesc("Send one tiny provider request to verify key, provider, and model before creating a briefing.")
+      .addButton((button) =>
+        button
+          .setButtonText("Test AI")
+          .onClick(() => void this.plugin.testAiConnection()),
+      );
+
+    new Setting(containerEl)
       .setName("Import")
       .setDesc("Collect RSS items and write article notes.")
       .addButton((button) =>
@@ -812,6 +1013,43 @@ function parseSources(text: string): FeedSource[] {
       };
     })
     .filter((source) => /^https?:\/\//i.test(source.url));
+}
+
+function getProviderPresets(provider: AiProvider): ModelPreset[] {
+  if (provider === "none") return [];
+  return MODEL_PRESETS.filter((preset) => preset.provider === provider);
+}
+
+function findPreset(provider: AiProvider, model: string): ModelPreset | undefined {
+  return getProviderPresets(provider).find((preset) => preset.model === model);
+}
+
+function formatPresetLabel(preset: ModelPreset): string {
+  return `${preset.label} - $${formatUsd(preset.inputUsdPerMTok)}/$${formatUsd(preset.outputUsdPerMTok)} per 1M`;
+}
+
+function formatPresetDetails(preset?: ModelPreset): string {
+  if (!preset) return "Custom model. Check the provider pricing page for current token cost and availability.";
+  return `${preset.note} Price: $${formatUsd(preset.inputUsdPerMTok)} input / $${formatUsd(preset.outputUsdPerMTok)} output per 1M tokens. Source: ${preset.source}.`;
+}
+
+function formatUsd(value: number): string {
+  return value >= 1 ? value.toFixed(2) : value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function likelyKeyProviderWarning(provider: AiProvider, key: string): string {
+  const trimmed = key.trim();
+  if (provider === "none" || !trimmed) return "";
+  if (provider === "openai" && !trimmed.startsWith("sk-")) {
+    return "OpenAI selected, but the key does not look like an OpenAI API key. Check provider and key.";
+  }
+  if (provider === "anthropic" && !trimmed.startsWith("sk-ant-")) {
+    return "Anthropic selected, but the key does not look like a Claude API key. OpenAI keys will return 401 here.";
+  }
+  if (provider === "gemini" && trimmed.startsWith("sk-")) {
+    return "Gemini selected, but the key looks like an OpenAI or Anthropic key. Use a Google AI Studio API key.";
+  }
+  return "";
 }
 
 function parseFeed(xml: string, source: FeedSource): FeedItem[] {
@@ -1019,8 +1257,16 @@ function tableCell(value: string): string {
 function assertOk(status: number, provider: string, body?: string) {
   if (status < 200 || status >= 300) {
     const detail = summarizeProviderError(body);
-    throw new Error(`${provider} HTTP ${status}${detail ? `: ${detail}` : ""}`);
+    const auth = status === 401 ? providerAuthHint(provider) : "";
+    throw new Error(`${provider} HTTP ${status}${detail ? `: ${detail}` : ""}${auth ? ` ${auth}` : ""}`);
   }
+}
+
+function providerAuthHint(provider: string): string {
+  if (provider === "OpenAI") return "Check that the key is active, belongs to an API project with billing enabled, and is entered under OpenAI.";
+  if (provider === "Anthropic") return "Check that the key starts with sk-ant-, is active, and is entered under Anthropic Claude.";
+  if (provider === "Gemini") return "Check that the Google AI Studio key is active and is entered under Google Gemini.";
+  return "Check provider selection and API key.";
 }
 
 function summarizeProviderError(body?: string): string {
