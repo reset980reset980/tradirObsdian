@@ -20,6 +20,7 @@ interface TradirSettings {
   outputFolder: string;
   sourceText: string;
   defaultLimit: number;
+  historyLimit: number;
   aiProvider: AiProvider;
   aiModel: string;
   apiKey: string;
@@ -87,13 +88,16 @@ const DEFAULT_SOURCES = [
 const DEFAULT_SETTINGS: TradirSettings = {
   outputFolder: "Trading News Radar",
   sourceText: DEFAULT_SOURCES,
-  defaultLimit: 10,
+  defaultLimit: 80,
+  historyLimit: 30000,
   aiProvider: "none",
   aiModel: "",
   apiKey: "",
   maxOutputTokens: 1800,
   language: "Korean",
 };
+
+const AI_ANALYSIS_BATCH_SIZE = 12;
 
 const PROVIDER_DEFAULT_MODELS: Record<AiProvider, string> = {
   none: "",
@@ -398,8 +402,9 @@ export default class TradirObsdianPlugin extends Plugin {
       await this.testProviderAuth();
 
       const analyzed = await this.analyzeItems(items, false);
-      new TradirBriefingModal(this.app, this, analyzed, "feed").open();
-      new Notice(`Opened translated news feed with ${analyzed.length} item${analyzed.length === 1 ? "" : "s"}.`);
+      const allArticles = await this.mergeWithStoredArticles(analyzed);
+      new TradirBriefingModal(this.app, this, allArticles, "feed").open();
+      new Notice(`Opened translated news feed with ${allArticles.length} item${allArticles.length === 1 ? "" : "s"}.`);
       this.setStatus("Translated");
     } catch (error) {
       this.handleError("Could not translate trading news", error);
@@ -424,8 +429,9 @@ export default class TradirObsdianPlugin extends Plugin {
       }
       await this.writeBriefingNote(analyzed);
       await this.refreshIndex();
-      new TradirBriefingModal(this.app, this, analyzed, "feed").open();
-      new Notice(`Completed one-click workflow for ${analyzed.length} item${analyzed.length === 1 ? "" : "s"}.`);
+      const allArticles = await this.mergeWithStoredArticles(analyzed);
+      new TradirBriefingModal(this.app, this, allArticles, "feed").open();
+      new Notice(`Completed one-click workflow for ${allArticles.length} item${allArticles.length === 1 ? "" : "s"}.`);
       this.setStatus("Done");
     } catch (error) {
       this.handleError("Could not run one-click workflow", error);
@@ -448,7 +454,8 @@ export default class TradirObsdianPlugin extends Plugin {
       await this.refreshIndex();
       new Notice("Created trading news briefing.");
       this.setStatus("Briefing done");
-      new TradirBriefingModal(this.app, this, analyzed, "insight").open();
+      const allArticles = await this.mergeWithStoredArticles(analyzed);
+      new TradirBriefingModal(this.app, this, allArticles, "insight").open();
     } catch (error) {
       this.handleError("Could not create briefing", error);
     }
@@ -473,6 +480,36 @@ export default class TradirObsdianPlugin extends Plugin {
     return dedupeByUrl(collected)
       .sort((a, b) => timestamp(b.publishedAt) - timestamp(a.publishedAt))
       .slice(0, Math.max(1, this.settings.defaultLimit));
+  }
+
+  private async mergeWithStoredArticles(current: AnalyzedArticle[]): Promise<AnalyzedArticle[]> {
+    const stored = await this.loadStoredArticles();
+    return dedupeAnalyzedByUrl([...current, ...stored])
+      .sort((a, b) => timestamp(b.publishedAt) - timestamp(a.publishedAt))
+      .slice(0, Math.max(1, this.settings.historyLimit));
+  }
+
+  private async loadStoredArticles(): Promise<AnalyzedArticle[]> {
+    const articleFolder = `${normalizePath(this.settings.outputFolder)}/Articles/`;
+    const limit = Math.max(1, this.settings.historyLimit);
+    const files = this.app.vault
+      .getMarkdownFiles()
+      .filter((file) => file.path.startsWith(articleFolder))
+      .sort((a, b) => b.path.localeCompare(a.path))
+      .slice(0, limit);
+    const articles: AnalyzedArticle[] = [];
+
+    for (const file of files) {
+      try {
+        const text = await this.app.vault.cachedRead(file);
+        const article = parseStoredArticle(text, file);
+        if (article) articles.push(article);
+      } catch (error) {
+        console.warn(`[Tradir Obsdian] Could not read stored article ${file.path}`, error);
+      }
+    }
+
+    return articles;
   }
 
   private async fetchSource(source: FeedSource): Promise<FeedItem[]> {
@@ -505,11 +542,15 @@ export default class TradirObsdianPlugin extends Plugin {
 
     let parsed: AiArticleResult[] = [];
     try {
-      const prompt = buildAnalysisPrompt(items, this.settings.language);
-      const rawText = await this.callAi(prompt, this.settings.maxOutputTokens);
-      parsed = parseAiResults(rawText);
-      if (!parsed.length) {
-        throw new Error("AI response did not contain a JSON array.");
+      const batches = chunk(items, AI_ANALYSIS_BATCH_SIZE);
+      for (const batch of batches) {
+        const prompt = buildAnalysisPrompt(batch, this.settings.language);
+        const rawText = await this.callAi(prompt, this.settings.maxOutputTokens);
+        const batchParsed = parseAiResults(rawText);
+        if (!batchParsed.length) {
+          throw new Error(`AI response did not contain parsable articles JSON. ${rawText.slice(0, 180)}`);
+        }
+        parsed.push(...batchParsed);
       }
     } catch (error) {
       if (!fallbackOnError) {
@@ -699,6 +740,7 @@ export default class TradirObsdianPlugin extends Plugin {
       `title: "${yamlEscape(article.title)}"`,
       `type: "trading-news-article"`,
       `project: "Tradir Obsdian"`,
+      `original_title: "${yamlEscape(article.originalTitle)}"`,
       `source: "${yamlEscape(article.source)}"`,
       `category: "${yamlEscape(article.category)}"`,
       `importance: ${article.importance}`,
@@ -731,6 +773,10 @@ export default class TradirObsdianPlugin extends Plugin {
       "## RSS 발췌",
       "",
       article.description || "_RSS 발췌가 없습니다._",
+      "",
+      "## 원문 제목",
+      "",
+      article.originalTitle || article.title,
       "",
       article.tags.length ? `태그: ${article.tags.map((tag) => `#${tag.replace(/\s+/g, "-")}`).join(" ")}` : "",
       "",
@@ -938,7 +984,7 @@ class TradirSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Default article limit")
-      .setDesc("Maximum RSS items processed per command run.")
+      .setDesc("Maximum RSS items processed per command run. Higher values use more AI tokens when AI is enabled.")
       .addText((text) =>
         text
           .setPlaceholder(String(DEFAULT_SETTINGS.defaultLimit))
@@ -946,6 +992,20 @@ class TradirSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             const parsed = Number.parseInt(value, 10);
             this.plugin.settings.defaultLimit = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SETTINGS.defaultLimit;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Stored article history limit")
+      .setDesc("Maximum saved article notes loaded into the radar popup for search, dashboard counts, and insights.")
+      .addText((text) =>
+        text
+          .setPlaceholder(String(DEFAULT_SETTINGS.historyLimit))
+          .setValue(String(this.plugin.settings.historyLimit))
+          .onChange(async (value) => {
+            const parsed = Number.parseInt(value, 10);
+            this.plugin.settings.historyLimit = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SETTINGS.historyLimit;
             await this.plugin.saveSettings();
           }),
       );
@@ -1232,6 +1292,10 @@ class TradirCommandModal extends Modal {
 
 class TradirBriefingModal extends Modal {
   private activeCategory = "all";
+  private searchQuery = "";
+  private page = 0;
+  private railStatusEl: HTMLElement | null = null;
+  private readonly pageSize = 30;
 
   constructor(
     app: App,
@@ -1257,14 +1321,19 @@ class TradirBriefingModal extends Modal {
     const visible = this.activeCategory === "all"
       ? sorted
       : sorted.filter((article) => (article.category || "trading_other") === this.activeCategory);
-    const modeArticles = this.getModeArticles(visible);
+    const searched = filterArticles(visible, this.searchQuery);
+    if (this.activeMode === "feed") {
+      this.page = Math.min(this.page, Math.max(0, Math.ceil(searched.length / this.pageSize) - 1));
+    }
+    const modeArticles = this.getModeArticles(searched);
 
-    const shell = contentEl.createDiv({ cls: "tradir-radar-shell is-report-only" });
+    const shell = contentEl.createDiv({ cls: "tradir-radar-shell" });
+    this.renderRail(shell, sorted, model);
     const main = shell.createDiv({ cls: "tradir-radar-main" });
     const header = main.createDiv({ cls: "tradir-briefing-hero" });
     const eyebrow = header.createDiv({ cls: "tradir-briefing-eyebrow", text: today() });
     eyebrow.createSpan({ text: " · AI News Radar" });
-    header.createEl("h2", { text: this.getModeTitle(modeArticles.length) });
+    header.createEl("h2", { text: this.getModeTitle(searched.length) });
     header.createEl("p", { text: this.getModeDescription(sorted) });
 
     const metrics = header.createDiv({ cls: "tradir-metric-grid" });
@@ -1284,16 +1353,69 @@ class TradirBriefingModal extends Modal {
     categoryCounts(sorted).forEach(([category, count]) => {
       this.addCategoryFilter(filters, category, `${categoryLabel(category)} (${count})`);
     });
+    this.renderSearchControls(header, searched.length);
 
     if (this.activeMode === "dashboard") {
-      this.renderDashboard(main, sorted, visible, model);
+      this.renderDashboard(main, sorted, searched, model);
     } else if (this.activeMode === "feed") {
-      this.renderFeed(main, modeArticles);
+      this.renderFeed(main, modeArticles, searched.length);
     } else if (this.activeMode === "ai") {
       this.renderAi(main, modeArticles, model);
     } else {
       this.renderInsight(main, modeArticles, sorted);
     }
+  }
+
+  private renderRail(container: HTMLElement, articles: AnalyzedArticle[], model: string) {
+    const rail = container.createDiv({ cls: "tradir-radar-rail" });
+    rail.createEl("h2", { text: "AI News Radar" });
+    rail.createEl("p", { text: this.plugin.settings.aiProvider === "none" ? "RSS only" : `${this.plugin.settings.aiProvider} · ${model}` });
+    const actions = rail.createDiv({ cls: "tradir-rail-actions" });
+    this.addRailAction(actions, "수집", () => this.plugin.collectLatestNews());
+    this.addRailAction(actions, "AI 처리", () => this.plugin.translateLatestNews());
+    this.addRailAction(actions, "브리핑", () => this.plugin.createDailyBriefing());
+    this.addRailAction(actions, "번역", () => this.plugin.translateLatestNews());
+    const oneClick = rail.createEl("button", { cls: "tradir-rail-primary", text: "원클릭 전체 실행" });
+    oneClick.addEventListener("click", () => {
+      void this.runRailAction(oneClick, "원클릭 전체 실행", () => this.plugin.runOneClickWorkflow());
+    });
+    const groups = rail.createDiv({ cls: "tradir-rail-groups" });
+    groups.createEl("span", { text: "필터" });
+    groups.createEl("span", { text: "워치리스트" });
+    groups.createEl("span", { text: "소스 관리" });
+    const meta = rail.createDiv({ cls: "tradir-rail-meta" });
+    meta.createEl("span", { text: `${articles.length}개 수집` });
+    meta.createEl("span", { text: `${articles.length}개 분석` });
+    this.railStatusEl = meta.createEl("span", { cls: "tradir-rail-status", text: "대기 중" });
+  }
+
+  private addRailAction(container: HTMLElement, label: string, run: () => Promise<void>) {
+    const button = container.createEl("button", { text: label });
+    button.addEventListener("click", () => {
+      void this.runRailAction(button, label, run);
+    });
+  }
+
+  private async runRailAction(button: HTMLButtonElement, label: string, run: () => Promise<void>) {
+    button.disabled = true;
+    button.addClass("is-running");
+    this.setRailStatus(`${label} 실행 중...`);
+    try {
+      await run();
+      this.setRailStatus(`${label} 완료`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.setRailStatus(`${label} 실패: ${message}`);
+      throw error;
+    } finally {
+      button.disabled = false;
+      button.removeClass("is-running");
+    }
+  }
+
+  private setRailStatus(text: string) {
+    if (!this.railStatusEl) return;
+    this.railStatusEl.setText(text);
   }
 
   private renderDashboard(container: HTMLElement, allArticles: AnalyzedArticle[], visible: AnalyzedArticle[], model: string) {
@@ -1303,31 +1425,35 @@ class TradirBriefingModal extends Modal {
     focus.createEl("p", { text: briefingLead(visible) });
 
     const cards = body.createDiv({ cls: "tradir-dashboard-cards" });
-    categoryCounts(allArticles).slice(0, 6).forEach(([category, count]) => {
-      const card = cards.createDiv({ cls: "tradir-dashboard-card" });
-      card.createEl("span", { text: categoryLabel(category) });
-      card.createEl("strong", { text: `${count}건` });
-    });
+    const topCategories = categoryCounts(allArticles).slice(0, 6);
+    topCategories.forEach(([category, count]) => addDashboardCard(cards, categoryLabel(category), `${count}건`));
 
-    const bottom = body.createDiv({ cls: "tradir-briefing-body" });
-    const left = bottom.createDiv({ cls: "tradir-briefing-main" });
-    left.createEl("h3", { text: this.getSectionTitle(Math.min(visible.length, 6)) });
-    const list = left.createDiv({ cls: "tradir-story-list" });
-    visible.slice(0, 6).forEach((article, index) => addStory(list, article, index));
+    const charts = body.createDiv({ cls: "tradir-chart-row" });
+    const positive = allArticles.filter((article) => article.sentiment === "positive").length;
+    const negative = allArticles.filter((article) => article.sentiment === "negative").length;
+    const neutral = allArticles.length - positive - negative;
+    const positiveRate = allArticles.length ? Math.round((positive / allArticles.length) * 100) : 0;
+    addGauge(charts, "긍정 비율", positiveRate);
+    addDonut(charts, positive, neutral, negative);
 
-    const side = bottom.createDiv({ cls: "tradir-briefing-side" });
-    side.createEl("h3", { text: "실행 설정" });
-    const settingsTable = side.createEl("table", { cls: "tradir-mini-table" });
+    const summary = body.createDiv({ cls: "tradir-dashboard-summary" });
+    const categoryTable = summary.createEl("table", { cls: "tradir-mini-table" });
+    addTableHead(categoryTable, ["관심 분야", "뉴스 수", "평균 중요도"]);
+    addCategoryTableRows(categoryTable, allArticles);
+
+    const settingsTable = summary.createEl("table", { cls: "tradir-mini-table" });
     addKeyValueRow(settingsTable, "Provider", this.plugin.settings.aiProvider);
     addKeyValueRow(settingsTable, "Model", model);
     addKeyValueRow(settingsTable, "RSS limit", String(this.plugin.settings.defaultLimit));
   }
 
-  private renderFeed(container: HTMLElement, articles: AnalyzedArticle[]) {
+  private renderFeed(container: HTMLElement, articles: AnalyzedArticle[], total: number) {
     const section = container.createDiv({ cls: "tradir-mode-section" });
-    section.createEl("h3", { text: this.getSectionTitle(articles.length) });
+    section.createEl("h3", { text: this.getSectionTitle(total) });
+    this.renderPager(section, total);
     const list = section.createDiv({ cls: "tradir-story-list" });
-    articles.forEach((article, index) => addStory(list, article, index));
+    articles.forEach((article, index) => addStory(list, article, this.page * this.pageSize + index));
+    this.renderPager(section, total);
   }
 
   private renderAi(container: HTMLElement, articles: AnalyzedArticle[], model: string) {
@@ -1373,6 +1499,7 @@ class TradirBriefingModal extends Modal {
     });
     button.addEventListener("click", () => {
       this.activeCategory = category;
+      this.page = 0;
       this.onOpen();
     });
   }
@@ -1384,18 +1511,71 @@ class TradirBriefingModal extends Modal {
     });
     button.addEventListener("click", () => {
       this.activeMode = mode;
+      this.page = 0;
       this.onOpen();
     });
   }
 
   private getModeArticles(articles: AnalyzedArticle[]): AnalyzedArticle[] {
-    if (this.activeMode === "feed") return articles;
+    if (this.activeMode === "feed") {
+      const start = this.page * this.pageSize;
+      return articles.slice(start, start + this.pageSize);
+    }
     if (this.activeMode === "ai") return articles.filter((article) => article.summary || article.tags.length).slice(0, 20);
     if (this.activeMode === "insight") {
       const high = articles.filter((article) => article.importance >= 4);
       return (high.length ? high : articles).slice(0, 15);
     }
     return articles.slice(0, 10);
+  }
+
+  private renderSearchControls(container: HTMLElement, total: number) {
+    const row = container.createDiv({ cls: "tradir-search-row" });
+    const input = row.createEl("input", {
+      type: "search",
+      placeholder: "제목, 요약, 태그, 출처 검색",
+    });
+    input.value = this.searchQuery;
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      this.searchQuery = input.value.trim();
+      this.page = 0;
+      this.onOpen();
+    });
+    const search = row.createEl("button", { text: "검색" });
+    search.addEventListener("click", () => {
+      this.searchQuery = input.value.trim();
+      this.page = 0;
+      this.onOpen();
+    });
+    const clear = row.createEl("button", { text: "초기화" });
+    clear.disabled = !this.searchQuery;
+    clear.addEventListener("click", () => {
+      this.searchQuery = "";
+      this.page = 0;
+      this.onOpen();
+    });
+    row.createEl("span", { text: `${total}개 표시` });
+  }
+
+  private renderPager(container: HTMLElement, total: number) {
+    if (this.activeMode !== "feed" || total <= this.pageSize) return;
+    const pageCount = Math.max(1, Math.ceil(total / this.pageSize));
+    this.page = Math.min(this.page, pageCount - 1);
+    const pager = container.createDiv({ cls: "tradir-pager" });
+    const prev = pager.createEl("button", { text: "이전" });
+    prev.disabled = this.page <= 0;
+    prev.addEventListener("click", () => {
+      this.page = Math.max(0, this.page - 1);
+      this.onOpen();
+    });
+    pager.createEl("span", { text: `${this.page + 1} / ${pageCount}` });
+    const next = pager.createEl("button", { text: "다음" });
+    next.disabled = this.page >= pageCount - 1;
+    next.addEventListener("click", () => {
+      this.page = Math.min(pageCount - 1, this.page + 1);
+      this.onOpen();
+    });
   }
 
   private getModeTitle(count: number): string {
@@ -1438,6 +1618,36 @@ function addInsight(container: HTMLElement, label: string, value: string) {
   const card = container.createDiv({ cls: "tradir-insight-card" });
   card.createEl("span", { text: label });
   card.createEl("strong", { text: value });
+}
+
+function addDashboardCard(container: HTMLElement, label: string, value: string) {
+  const card = container.createDiv({ cls: "tradir-dashboard-card" });
+  card.createEl("span", { text: label });
+  card.createEl("strong", { text: value });
+}
+
+function addGauge(container: HTMLElement, label: string, value: number) {
+  const card = container.createDiv({ cls: "tradir-chart-card" });
+  card.createEl("h3", { text: label });
+  const gauge = card.createDiv({ cls: "tradir-gauge" });
+  gauge.setAttr("style", `--value:${Math.max(0, Math.min(100, value))}`);
+  gauge.createDiv({ cls: "tradir-gauge-value", text: `${value}%` });
+}
+
+function addDonut(container: HTMLElement, positive: number, neutral: number, negative: number) {
+  const total = Math.max(1, positive + neutral + negative);
+  const pos = Math.round((positive / total) * 100);
+  const neu = Math.round((neutral / total) * 100);
+  const neg = Math.max(0, 100 - pos - neu);
+  const card = container.createDiv({ cls: "tradir-chart-card" });
+  card.createEl("h3", { text: "감성 분포" });
+  const donut = card.createDiv({ cls: "tradir-donut" });
+  donut.setAttr("style", `--pos:${pos};--neu:${neu};--neg:${neg}`);
+  donut.createDiv({ cls: "tradir-donut-hole", text: `${pos}%` });
+  const legend = card.createDiv({ cls: "tradir-donut-legend" });
+  legend.createEl("span", { text: `긍정 ${pos}%` });
+  legend.createEl("span", { text: `중립 ${neu}%` });
+  legend.createEl("span", { text: `부정 ${neg}%` });
 }
 
 function averageImportance(articles: AnalyzedArticle[]): string {
@@ -1666,8 +1876,8 @@ function buildAnalysisPrompt(items: FeedItem[], language: string): string {
 
   return [
     `Analyze these trading and financial news RSS items. Respond in ${language}.`,
-    "Return only valid JSON. The top-level value must be an array.",
-    "Each array item must include: url, title, summary, category, importance, sentiment, tags.",
+    "Return only valid JSON with this exact top-level shape: {\"articles\":[...]}",
+    "Each articles item must include: url, title, summary, category, importance, sentiment, tags.",
     `Translate title and summary into ${language}. Preserve the original source meaning and do not leave title in English unless it is a company, ticker, or product name.`,
     "category should be one of: crypto, us_stock, kr_stock, macro, rates, fx, commodity, regulation, trading_other.",
     "importance must be an integer from 1 to 5. sentiment must be positive, neutral, or negative.",
@@ -1677,10 +1887,16 @@ function buildAnalysisPrompt(items: FeedItem[], language: string): string {
 }
 
 function parseAiResults(rawText: string): AiArticleResult[] {
-  const trimmed = rawText.trim();
+  const trimmed = rawText.trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
   const direct = tryParseJson(trimmed);
   if (Array.isArray(direct)) return direct as AiArticleResult[];
   if (isObject(direct) && Array.isArray(direct.articles)) return direct.articles as AiArticleResult[];
+
+  const objectMatch = trimmed.match(/\{[\s\S]*\}/);
+  if (objectMatch) {
+    const objectParsed = tryParseJson(objectMatch[0]);
+    if (isObject(objectParsed) && Array.isArray(objectParsed.articles)) return objectParsed.articles as AiArticleResult[];
+  }
 
   const match = trimmed.match(/\[[\s\S]*\]/);
   if (!match) return [];
@@ -1840,6 +2056,116 @@ function dedupeByUrl(items: FeedItem[]): FeedItem[] {
     out.push(item);
   }
   return out;
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    out.push(items.slice(index, index + size));
+  }
+  return out;
+}
+
+function dedupeAnalyzedByUrl(items: AnalyzedArticle[]): AnalyzedArticle[] {
+  const seen = new Set<string>();
+  const out: AnalyzedArticle[] = [];
+  for (const item of items) {
+    const key = item.url || item.id || item.title;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+function parseStoredArticle(text: string, file: TFile): AnalyzedArticle | null {
+  const frontmatter = text.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!frontmatter) return null;
+  const yaml = frontmatter[1];
+  if (readYamlScalar(yaml, "type") !== "trading-news-article") return null;
+
+  const title = cleanText(readYamlScalar(yaml, "title") || file.basename);
+  const source = cleanText(readYamlScalar(yaml, "source") || "Stored note");
+  const category = cleanText(readYamlScalar(yaml, "category") || inferCategory(text));
+  const url = cleanText(readYamlScalar(yaml, "url"));
+  const publishedAt = cleanText(readYamlScalar(yaml, "published_at") || new Date(file.stat.mtime).toISOString());
+  const originalTitle = cleanText(readYamlScalar(yaml, "original_title") || extractStoredSection(text, "원문 제목") || title);
+  const summary = cleanText(extractStoredSummary(text) || extractStoredSection(text, "RSS 발췌") || title);
+  const description = cleanText(extractStoredSection(text, "RSS 발췌") || summary);
+  const tags = parseYamlTags(readYamlRaw(yaml, "tags")).filter((tag) => !["trading-news", category].includes(tag)).slice(0, 8);
+
+  return {
+    id: hashString(`${source}:${url || title}`),
+    source,
+    title,
+    url,
+    description,
+    publishedAt,
+    originalTitle,
+    originalDescription: description,
+    summary,
+    category,
+    importance: clampImportance(readYamlScalar(yaml, "importance")),
+    sentiment: normalizeSentiment(readYamlScalar(yaml, "sentiment")),
+    tags: tags.length ? tags : buildTags(`${title} ${summary}`),
+  };
+}
+
+function filterArticles(articles: AnalyzedArticle[], query: string): AnalyzedArticle[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return articles;
+  return articles.filter((article) => {
+    const haystack = [
+      article.title,
+      article.originalTitle,
+      article.summary,
+      article.description,
+      article.source,
+      categoryLabel(article.category),
+      ...article.tags,
+    ].join(" ").toLowerCase();
+    return haystack.includes(normalized);
+  });
+}
+
+function readYamlRaw(yaml: string, key: string): string {
+  const match = yaml.match(new RegExp(`^${escapeRegExp(key)}:\\s*(.*)$`, "m"));
+  return match ? match[1].trim() : "";
+}
+
+function readYamlScalar(yaml: string, key: string): string {
+  const raw = readYamlRaw(yaml, key);
+  if (!raw) return "";
+  if ((raw.startsWith("\"") && raw.endsWith("\"")) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    return raw.slice(1, -1).replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
+  }
+  return raw;
+}
+
+function parseYamlTags(raw: string): string[] {
+  if (!raw) return [];
+  const quoted = Array.from(raw.matchAll(/"([^"]+)"/g)).map((match) => match[1]);
+  if (quoted.length) return quoted.map(cleanText).filter(Boolean);
+  return raw
+    .replace(/^\[/, "")
+    .replace(/\]$/, "")
+    .split(",")
+    .map((tag) => cleanText(tag.replace(/^#/, "")))
+    .filter(Boolean);
+}
+
+function extractStoredSummary(text: string): string {
+  const match = text.match(/>\s*\[!abstract\][^\n]*\n>\s*([^\n]+)/);
+  return match ? match[1].replace(/^>\s*/, "").trim() : "";
+}
+
+function extractStoredSection(text: string, heading: string): string {
+  const match = text.match(new RegExp(`##\\s+${escapeRegExp(heading)}\\s+([\\s\\S]*?)(?:\\n##\\s+|\\n태그:|$)`));
+  return match ? match[1].trim() : "";
+}
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function inferSourceName(url: string): string {
