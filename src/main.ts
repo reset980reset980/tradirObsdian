@@ -57,8 +57,8 @@ interface AiArticleResult {
   title?: string;
   summary?: string;
   category?: string;
-  importance?: number;
-  sentiment?: Sentiment;
+  importance?: unknown;
+  sentiment?: unknown;
   tags?: string[];
 }
 
@@ -562,16 +562,16 @@ export default class TradirObsdianPlugin extends Plugin {
       return baseline;
     }
 
-    const byUrl = new Map(parsed.map((item) => [item.url || "", item]));
-    return baseline.map((article) => {
-      const ai = byUrl.get(article.url) || parsed.find((candidate) => candidate.title === article.title);
+    const byUrl = new Map(parsed.filter((item) => item.url).map((item) => [item.url || "", item]));
+    return baseline.map((article, index) => {
+      const ai = byUrl.get(article.url) || parsed.find((candidate) => candidate.title === article.title) || parsed[index];
       if (!ai) return article;
 
       return {
         ...article,
         title: cleanText(ai.title || article.title),
         summary: cleanText(ai.summary || article.summary),
-        category: cleanText(ai.category || article.category),
+        category: normalizeCategory(ai.category || article.category),
         importance: clampImportance(ai.importance),
         sentiment: normalizeSentiment(ai.sentiment),
         tags: Array.isArray(ai.tags) ? ai.tags.map(cleanText).filter(Boolean).slice(0, 8) : article.tags,
@@ -1157,14 +1157,6 @@ class TradirSettingTab extends PluginSettingTab {
           .onClick(() => void this.plugin.collectLatestNews()),
       );
 
-    new Setting(containerEl)
-      .setName("Briefing")
-      .setDesc("Collect RSS items and write a daily briefing note.")
-      .addButton((button) =>
-        button
-          .setButtonText("Create briefing")
-          .onClick(() => void this.plugin.createDailyBriefing()),
-      );
   }
 }
 
@@ -1185,7 +1177,7 @@ class TradirCommandModal extends Modal {
     header.createDiv({ cls: "tradir-command-mark", text: "TN" });
     const title = header.createDiv();
     title.createEl("h2", { text: "Tradir News Radar" });
-    title.createEl("p", { text: "원본 뉴스 레이더처럼 수집, AI 처리, 브리핑, 번역을 순서대로 실행합니다." });
+    title.createEl("p", { text: "뉴스 수집, AI 분석 미리보기, 원클릭 브리핑 생성을 실행합니다." });
 
     const grid = contentEl.createDiv({ cls: "tradir-command-grid" });
     this.addAction(grid, {
@@ -1200,19 +1192,6 @@ class TradirCommandModal extends Modal {
       title: "AI 처리",
       desc: "분류, 중요도, 감성, 번역 분석",
       primary: true,
-      run: async () => this.plugin.translateLatestNews(),
-    });
-    this.addAction(grid, {
-      icon: "◫",
-      title: "브리핑",
-      desc: "일일 브리핑 저장 후 HTML로 보기",
-      primary: true,
-      run: async () => this.plugin.createDailyBriefing(),
-    });
-    this.addAction(grid, {
-      icon: "◎",
-      title: "번역",
-      desc: "번역된 뉴스피드 HTML로 보기",
       run: async () => this.plugin.translateLatestNews(),
     });
     this.addAction(grid, {
@@ -1400,6 +1379,7 @@ class TradirBriefingModal extends Modal {
       cls: `tradir-filter${this.activeCategory === category ? " is-active" : ""}`,
       text: label,
     });
+    button.setAttr("style", `--tradir-category-color:${categoryColor(category)}`);
     button.addEventListener("click", () => {
       this.activeCategory = category;
       this.page = 0;
@@ -1505,6 +1485,7 @@ function addMetric(container: HTMLElement, label: string, value: string) {
 
 function addDashboardCard(container: HTMLElement, label: string, value: string) {
   const card = container.createDiv({ cls: "tradir-dashboard-card" });
+  card.setAttr("style", `--tradir-category-color:${categoryColor(labelToCategory(label))}`);
   card.createEl("span", { text: label });
   card.createEl("strong", { text: value });
 }
@@ -1513,7 +1494,8 @@ function addGauge(container: HTMLElement, label: string, value: number) {
   const card = container.createDiv({ cls: "tradir-chart-card" });
   card.createEl("h3", { text: label });
   const gauge = card.createDiv({ cls: "tradir-gauge" });
-  gauge.setAttr("style", `--value:${Math.max(0, Math.min(100, value))}`);
+  const safeValue = Math.max(0, Math.min(100, value));
+  gauge.setAttr("style", `--angle:${safeValue * 1.8}deg`);
   gauge.createDiv({ cls: "tradir-gauge-value", text: `${value}%` });
 }
 
@@ -1525,7 +1507,7 @@ function addDonut(container: HTMLElement, positive: number, neutral: number, neg
   const card = container.createDiv({ cls: "tradir-chart-card" });
   card.createEl("h3", { text: "감성 분포" });
   const donut = card.createDiv({ cls: "tradir-donut" });
-  donut.setAttr("style", `--pos:${pos};--neu:${neu};--neg:${neg}`);
+  donut.setAttr("style", `--pos-end:${pos}%;--neu-end:${pos + neu}%`);
   donut.createDiv({ cls: "tradir-donut-hole", text: `${pos}%` });
   const legend = card.createDiv({ cls: "tradir-donut-legend" });
   legend.createEl("span", { text: `긍정 ${pos}%` });
@@ -1544,6 +1526,7 @@ function categoryCounts(articles: AnalyzedArticle[]): Array<[string, number]> {
 
 function addStory(container: HTMLElement, article: AnalyzedArticle, index: number) {
   const story = container.createDiv({ cls: `tradir-story is-${article.sentiment}` });
+  story.setAttr("style", `--tradir-category-color:${categoryColor(article.category)}`);
   const rank = story.createDiv({ cls: "tradir-story-rank", text: String(index + 1) });
   const content = story.createDiv({ cls: "tradir-story-content" });
   const meta = content.createDiv({ cls: "tradir-story-meta" });
@@ -1714,15 +1697,16 @@ function attrOf(node: Element, selector: string, attr: string): string {
 }
 
 function fallbackAnalysis(item: FeedItem): AnalyzedArticle {
+  const text = `${item.title} ${item.description}`;
   return {
     ...item,
     originalTitle: item.title,
     originalDescription: item.description,
     summary: item.description || "RSS item collected without AI analysis.",
-    category: inferCategory(`${item.title} ${item.description}`),
-    importance: 3,
-    sentiment: "neutral",
-    tags: buildTags(`${item.title} ${item.description}`),
+    category: inferCategory(text),
+    importance: inferImportance(text),
+    sentiment: inferSentiment(text),
+    tags: buildTags(text),
   };
 }
 
@@ -1740,8 +1724,8 @@ function buildAnalysisPrompt(items: FeedItem[], language: string): string {
     "Return only valid JSON with this exact top-level shape: {\"articles\":[...]}",
     "Each articles item must include: url, title, summary, category, importance, sentiment, tags.",
     `Translate title and summary into ${language}. Preserve the original source meaning and do not leave title in English unless it is a company, ticker, or product name.`,
-    "category should be one of: crypto, us_stock, kr_stock, macro, rates, fx, commodity, regulation, trading_other.",
-    "importance must be an integer from 1 to 5. sentiment must be positive, neutral, or negative.",
+    "category must be one exact enum string: crypto, us_stock, kr_stock, macro, rates, fx, commodity, regulation, trading_other.",
+    "importance must be an integer from 1 to 5. sentiment must be one exact English enum string: positive, neutral, negative.",
     "",
     JSON.stringify(compact),
   ].join("\n");
@@ -1860,6 +1844,28 @@ function categoryLabel(category: string): string {
   return labels[category] || category || "기타";
 }
 
+function labelToCategory(label: string): string {
+  const clean = cleanText(label);
+  const labels = ["crypto", "us_stock", "kr_stock", "macro", "rates", "fx", "commodity", "regulation", "trading_other"];
+  return labels.find((category) => categoryLabel(category) === clean) || normalizeCategory(clean);
+}
+
+function categoryColor(category: string): string {
+  const colors: Record<string, string> = {
+    all: "var(--interactive-accent)",
+    crypto: "var(--color-yellow, #d6a100)",
+    us_stock: "var(--color-blue, #4f8cff)",
+    kr_stock: "var(--color-green, #3fb950)",
+    macro: "var(--color-purple, #a371f7)",
+    rates: "var(--color-cyan, #39c5cf)",
+    fx: "var(--color-orange, #f59e0b)",
+    commodity: "var(--color-red, #f05252)",
+    regulation: "var(--color-pink, #ec4899)",
+    trading_other: "var(--text-muted)",
+  };
+  return colors[category] || colors.trading_other;
+}
+
 function sentimentIcon(sentiment: Sentiment): string {
   if (sentiment === "positive") return "🟢";
   if (sentiment === "negative") return "🔴";
@@ -1931,12 +1937,41 @@ function dedupeAnalyzedByUrl(items: AnalyzedArticle[]): AnalyzedArticle[] {
   const seen = new Set<string>();
   const out: AnalyzedArticle[] = [];
   for (const item of items) {
-    const key = item.url || item.id || item.title;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const keys = articleIdentityKeys(item);
+    if (keys.some((key) => seen.has(key))) continue;
+    keys.forEach((key) => seen.add(key));
     out.push(item);
   }
   return out;
+}
+
+function articleIdentityKeys(item: AnalyzedArticle): string[] {
+  return Array.from(new Set([
+    normalizeUrlKey(item.url),
+    titleFingerprint(item.originalTitle),
+    titleFingerprint(item.title),
+    item.id ? `id:${item.id}` : "",
+  ].filter(Boolean)));
+}
+
+function normalizeUrlKey(url: string): string {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "ref", "fbclid", "gclid"].forEach((key) => parsed.searchParams.delete(key));
+    parsed.hash = "";
+    return `url:${parsed.origin}${parsed.pathname.replace(/\/$/, "")}${parsed.search}`;
+  } catch {
+    return `url:${url.replace(/[?#].*$/, "").replace(/\/$/, "")}`;
+  }
+}
+
+function titleFingerprint(title: string): string {
+  const normalized = cleanText(title)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .slice(0, 120);
+  return normalized.length >= 12 ? `title:${normalized}` : "";
 }
 
 function parseStoredArticle(text: string, file: TFile): AnalyzedArticle | null {
@@ -2057,6 +2092,25 @@ function inferCategory(text: string): string {
   return "trading_other";
 }
 
+function inferImportance(text: string): number {
+  const lower = text.toLowerCase();
+  let score = 2;
+  if (/(breaking|urgent|surge|plunge|crash|rally|record|war|attack|tariff|sanction|lawsuit|sec|fed|fomc|inflation|rate cut|rate hike|etf|approval)/.test(lower)) score += 2;
+  if (/(bitcoin|ethereum|nasdaq|s&p|dow|oil|gold|dollar|treasury|yield|cpi|jobs|earnings)/.test(lower)) score += 1;
+  if (/(minor|preview|opinion|explainer|recap)/.test(lower)) score -= 1;
+  return Math.min(5, Math.max(1, score));
+}
+
+function inferSentiment(text: string): Sentiment {
+  const lower = text.toLowerCase();
+  const positive = /(surge|rally|gain|rise|jump|record high|approval|beat|bull|optimis|inflow|growth|recover|soar|상승|급등|호재|승인|회복|강세|긍정)/.test(lower);
+  const negative = /(drop|fall|slump|plunge|crash|loss|miss|risk|warning|lawsuit|ban|hack|war|attack|tariff|recession|bear|하락|급락|악재|경고|소송|금지|침체|부정)/.test(lower);
+  if (positive && !negative) return "positive";
+  if (negative && !positive) return "negative";
+  if (positive && negative) return "neutral";
+  return "neutral";
+}
+
 function buildTags(text: string): string[] {
   return Array.from(
     new Set(
@@ -2069,11 +2123,66 @@ function buildTags(text: string): string[] {
   ).slice(0, 6);
 }
 
+function normalizeCategory(value: unknown): string {
+  const normalized = cleanText(String(value || "")).toLowerCase().replace(/\s+/g, "_").replace(/[-/]+/g, "_");
+  const categories: Record<string, string> = {
+    crypto: "crypto",
+    cryptocurrency: "crypto",
+    coin: "crypto",
+    "암호화폐": "crypto",
+    "암호화폐_코인": "crypto",
+    "코인": "crypto",
+    us_stock: "us_stock",
+    stocks: "us_stock",
+    equities: "us_stock",
+    "미국_주식": "us_stock",
+    kr_stock: "kr_stock",
+    korean_stock: "kr_stock",
+    "한국_주식": "kr_stock",
+    macro: "macro",
+    economy: "macro",
+    "매크로": "macro",
+    "경제": "macro",
+    rates: "rates",
+    bonds: "rates",
+    "금리": "rates",
+    "금리_채권": "rates",
+    "채권": "rates",
+    fx: "fx",
+    forex: "fx",
+    currency: "fx",
+    "환율": "fx",
+    "환율_외환": "fx",
+    "외환": "fx",
+    commodity: "commodity",
+    commodities: "commodity",
+    "원자재": "commodity",
+    regulation: "regulation",
+    policy: "regulation",
+    "규제": "regulation",
+    "규제_정책": "regulation",
+    "정책": "regulation",
+    trading_other: "trading_other",
+    other: "trading_other",
+    "기타": "trading_other",
+  };
+  return categories[normalized] || inferCategory(normalized);
+}
+
 function normalizeSentiment(value: unknown): Sentiment {
-  return value === "positive" || value === "negative" || value === "neutral" ? value : "neutral";
+  const normalized = cleanText(String(value || "")).toLowerCase();
+  if (["positive", "bullish", "긍정", "강세", "호재", "상승"].some((token) => normalized.includes(token))) return "positive";
+  if (["negative", "bearish", "부정", "약세", "악재", "하락"].some((token) => normalized.includes(token))) return "negative";
+  if (["neutral", "mixed", "중립", "혼조", "보합"].some((token) => normalized.includes(token))) return "neutral";
+  return "neutral";
 }
 
 function clampImportance(value: unknown): number {
+  const normalized = cleanText(String(value || "")).toLowerCase();
+  if (/(very high|critical|highest|매우 높|최상|긴급)/.test(normalized)) return 5;
+  if (/(high|important|높|중요)/.test(normalized)) return 4;
+  if (/(medium|moderate|보통|중간)/.test(normalized)) return 3;
+  if (/(low|minor|낮|낮음)/.test(normalized)) return 2;
   const parsed = typeof value === "number" ? value : Number.parseInt(String(value || ""), 10);
   if (!Number.isFinite(parsed)) return 3;
   return Math.min(5, Math.max(1, Math.round(parsed)));
