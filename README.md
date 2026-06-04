@@ -49,6 +49,8 @@ If AI is enabled but the key is missing or the provider response fails, the plug
 
 OpenAI defaults to `gpt-4.1-mini` for broad account compatibility. Users can replace the model ID with any model their provider account supports.
 
+OpenAI calls use Chat Completions and automatically retry compatible request shapes when JSON mode or token-limit parameters return `400`, so model/account differences should no longer abort briefing creation.
+
 Briefing notes are formatted as clean Obsidian-native Markdown reports with a summary callout, compact metric tables, category distribution, priority story sections, and a full article table. The plugin adds a scoped `tradir-report` CSS class to generated notes.
 
 When AI is enabled, the plugin calls the selected provider directly from Obsidian using the user's own key. API keys are stored in this vault's plugin data, so users should avoid syncing plugin data to places they do not trust.

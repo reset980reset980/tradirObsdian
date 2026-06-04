@@ -1,7 +1,7 @@
 {
   "id": "tradir-obsdian",
   "name": "Tradir Obsdian",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "minAppVersion": "1.5.0",
   "description": "Obsidian-native trading news radar with RSS collection, BYOK AI analysis, and Markdown briefings.",
   "author": "reset980",

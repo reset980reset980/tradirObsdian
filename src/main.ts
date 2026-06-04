@@ -56,6 +56,11 @@ interface AiArticleResult {
   tags?: string[];
 }
 
+interface OpenAIChatAttempt {
+  label: string;
+  payload: Record<string, unknown>;
+}
+
 const DEFAULT_SOURCES = [
   "CoinDesk|https://www.coindesk.com/arc/outboundfeeds/rss",
   "Cointelegraph|https://cointelegraph.com/rss",
@@ -304,24 +309,89 @@ export default class TradirObsdianPlugin extends Plugin {
   }
 
   private async callOpenAI(model: string, prompt: string): Promise<string> {
-    const response = await requestUrl({
-      url: "https://api.openai.com/v1/responses",
+    const messages = [
+      {
+        role: "system",
+        content: "You analyze trading news. Return only valid JSON. Do not include markdown fences. JSON output should contain an articles array.",
+      },
+      {
+        role: "user",
+        content: prompt,
+      },
+    ];
+
+    const completionTokenPayload = {
+      model,
+      messages,
+      max_completion_tokens: this.settings.maxOutputTokens,
+    };
+
+    const legacyTokenPayload = {
+      model,
+      messages,
+      max_tokens: this.settings.maxOutputTokens,
+    };
+    const attempts: OpenAIChatAttempt[] = [
+      {
+        label: "json_object + max_completion_tokens",
+        payload: {
+          ...completionTokenPayload,
+          response_format: { type: "json_object" },
+        },
+      },
+      {
+        label: "plain + max_completion_tokens",
+        payload: completionTokenPayload,
+      },
+      {
+        label: "json_object + max_tokens",
+        payload: {
+          ...legacyTokenPayload,
+          response_format: { type: "json_object" },
+        },
+      },
+      {
+        label: "plain + max_tokens",
+        payload: legacyTokenPayload,
+      },
+      {
+        label: "plain without token cap",
+        payload: {
+          model,
+          messages,
+        },
+      },
+    ];
+
+    let lastResponse: Awaited<ReturnType<typeof this.postOpenAIChat>> | null = null;
+    for (const attempt of attempts) {
+      const response = await this.postOpenAIChat(attempt.payload);
+      lastResponse = response;
+      if (response.status >= 200 && response.status < 300) {
+        const json = response.json as Record<string, unknown>;
+        return extractOpenAIChatText(json);
+      }
+      if (response.status !== 400) {
+        assertOk(response.status, "OpenAI", response.text);
+      }
+      console.warn(`[Tradir Obsdian] OpenAI attempt failed (${attempt.label}), trying fallback`, response.text);
+    }
+
+    assertOk(lastResponse?.status || 400, "OpenAI", lastResponse?.text);
+    return "";
+  }
+
+  private async postOpenAIChat(payload: Record<string, unknown>) {
+    return requestUrl({
+      url: "https://api.openai.com/v1/chat/completions",
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.settings.apiKey.trim()}`,
       },
-      body: JSON.stringify({
-        model,
-        input: prompt,
-        max_output_tokens: this.settings.maxOutputTokens,
-      }),
+      body: JSON.stringify(payload),
       throw: false,
     });
-
-    assertOk(response.status, "OpenAI", response.text);
-    const json = response.json as Record<string, unknown>;
-    return extractOpenAIText(json);
   }
 
   private async callAnthropic(model: string, prompt: string): Promise<string> {
@@ -838,17 +908,11 @@ function tryParseJson(text: string): unknown {
   }
 }
 
-function extractOpenAIText(json: Record<string, unknown>): string {
-  if (typeof json.output_text === "string") return json.output_text;
-  const output = Array.isArray(json.output) ? json.output : [];
-  const parts: string[] = [];
-  for (const item of output) {
-    if (!isObject(item) || !Array.isArray(item.content)) continue;
-    for (const content of item.content) {
-      if (isObject(content) && typeof content.text === "string") parts.push(content.text);
-    }
-  }
-  return parts.join("\n");
+function extractOpenAIChatText(json: Record<string, unknown>): string {
+  const choices = Array.isArray(json.choices) ? json.choices : [];
+  const first = choices[0];
+  if (!isObject(first) || !isObject(first.message)) return "";
+  return typeof first.message.content === "string" ? first.message.content : "";
 }
 
 function extractAnthropicText(json: Record<string, unknown>): string {
