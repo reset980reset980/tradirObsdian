@@ -70,6 +70,8 @@ The command panel stays open while actions run and shows running/completed/faile
 
 Dashboard, news feed, AI, insight, and category controls in the report modal are active view filters. Translation requires an enabled AI provider and valid key; the translation action now fails visibly instead of silently falling back to untranslated RSS text.
 
+Report tabs render distinct views: dashboard summary cards, full translated news feed, AI classification table, and high-importance insight cards.
+
 When AI is enabled, the plugin calls the selected provider directly from Obsidian using the user's own key. API keys are stored in this vault's plugin data, so users should avoid syncing plugin data to places they do not trust.
 
 This plugin does not ship private keys, hard-coded local paths, or a default public endpoint.

@@ -1285,45 +1285,85 @@ class TradirBriefingModal extends Modal {
       this.addCategoryFilter(filters, category, `${categoryLabel(category)} (${count})`);
     });
 
-    const body = main.createDiv({ cls: "tradir-briefing-body" });
-    const left = body.createDiv({ cls: "tradir-briefing-main" });
-    left.createEl("h3", { text: this.getSectionTitle(modeArticles.length) });
-    const storyList = left.createDiv({ cls: "tradir-story-list" });
-    modeArticles.forEach((article, index) => addStory(storyList, article, index));
+    if (this.activeMode === "dashboard") {
+      this.renderDashboard(main, sorted, visible, model);
+    } else if (this.activeMode === "feed") {
+      this.renderFeed(main, modeArticles);
+    } else if (this.activeMode === "ai") {
+      this.renderAi(main, modeArticles, model);
+    } else {
+      this.renderInsight(main, modeArticles, sorted);
+    }
+  }
 
-    const side = body.createDiv({ cls: "tradir-briefing-side" });
-    side.createEl("h3", { text: "카테고리" });
-    const categoryTable = side.createEl("table", { cls: "tradir-mini-table" });
-    addTableHead(categoryTable, ["분류", "수", "평균"]);
-    addCategoryTableRows(categoryTable, sorted);
+  private renderDashboard(container: HTMLElement, allArticles: AnalyzedArticle[], visible: AnalyzedArticle[], model: string) {
+    const body = container.createDiv({ cls: "tradir-dashboard-view" });
+    const focus = body.createDiv({ cls: "tradir-dashboard-focus" });
+    focus.createEl("h3", { text: "브리핑" });
+    focus.createEl("p", { text: briefingLead(visible) });
 
+    const cards = body.createDiv({ cls: "tradir-dashboard-cards" });
+    categoryCounts(allArticles).slice(0, 6).forEach(([category, count]) => {
+      const card = cards.createDiv({ cls: "tradir-dashboard-card" });
+      card.createEl("span", { text: categoryLabel(category) });
+      card.createEl("strong", { text: `${count}건` });
+    });
+
+    const bottom = body.createDiv({ cls: "tradir-briefing-body" });
+    const left = bottom.createDiv({ cls: "tradir-briefing-main" });
+    left.createEl("h3", { text: this.getSectionTitle(Math.min(visible.length, 6)) });
+    const list = left.createDiv({ cls: "tradir-story-list" });
+    visible.slice(0, 6).forEach((article, index) => addStory(list, article, index));
+
+    const side = bottom.createDiv({ cls: "tradir-briefing-side" });
     side.createEl("h3", { text: "실행 설정" });
     const settingsTable = side.createEl("table", { cls: "tradir-mini-table" });
     addKeyValueRow(settingsTable, "Provider", this.plugin.settings.aiProvider);
     addKeyValueRow(settingsTable, "Model", model);
     addKeyValueRow(settingsTable, "RSS limit", String(this.plugin.settings.defaultLimit));
+  }
 
-    const all = main.createDiv({ cls: "tradir-full-list" });
-    all.createEl("h3", { text: "전체 뉴스" });
-    const table = all.createEl("table", { cls: "tradir-report-table" });
-    addTableHead(table, ["중요도", "감성", "카테고리", "제목", "출처"]);
+  private renderFeed(container: HTMLElement, articles: AnalyzedArticle[]) {
+    const section = container.createDiv({ cls: "tradir-mode-section" });
+    section.createEl("h3", { text: this.getSectionTitle(articles.length) });
+    const list = section.createDiv({ cls: "tradir-story-list" });
+    articles.forEach((article, index) => addStory(list, article, index));
+  }
+
+  private renderAi(container: HTMLElement, articles: AnalyzedArticle[], model: string) {
+    const section = container.createDiv({ cls: "tradir-mode-section" });
+    section.createEl("h3", { text: "AI 처리 요약" });
+    const grid = section.createDiv({ cls: "tradir-ai-grid" });
+    addMetric(grid, "Provider", this.plugin.settings.aiProvider);
+    addMetric(grid, "Model", model);
+    addMetric(grid, "분석 기사", String(articles.length));
+    addMetric(grid, "평균 중요도", averageImportance(articles));
+
+    const table = section.createEl("table", { cls: "tradir-report-table" });
+    addTableHead(table, ["중요도", "감성", "카테고리", "태그", "제목"]);
     const tbody = table.createEl("tbody");
-    modeArticles.forEach((article) => {
+    articles.forEach((article) => {
       const row = tbody.createEl("tr");
-      row.createEl("td", { text: String(article.importance) });
+      row.createEl("td", { text: importanceStars(article.importance) });
       row.createEl("td", { text: sentimentLabel(article.sentiment) });
       row.createEl("td", { text: categoryLabel(article.category) });
-      const title = row.createEl("td");
-      if (article.url) {
-        const link = title.createEl("a", { text: article.title });
-        link.setAttr("href", article.url);
-        link.setAttr("target", "_blank");
-        link.setAttr("rel", "noopener");
-      } else {
-        title.setText(article.title);
-      }
-      row.createEl("td", { text: article.source });
+      row.createEl("td", { text: article.tags.slice(0, 5).join(", ") || "-" });
+      row.createEl("td", { text: article.title });
     });
+  }
+
+  private renderInsight(container: HTMLElement, articles: AnalyzedArticle[], allArticles: AnalyzedArticle[]) {
+    const section = container.createDiv({ cls: "tradir-mode-section" });
+    section.createEl("h3", { text: this.getSectionTitle(articles.length) });
+    const insights = section.createDiv({ cls: "tradir-insight-grid" });
+    const risk = allArticles.filter((article) => article.sentiment === "negative").length;
+    const positive = allArticles.filter((article) => article.sentiment === "positive").length;
+    addInsight(insights, "시장 톤", risk > positive ? "리스크 우위" : positive > risk ? "긍정 우위" : "중립");
+    addInsight(insights, "핵심 카테고리", categoryLabel(categoryCounts(allArticles)[0]?.[0] || "trading_other"));
+    addInsight(insights, "고중요도", `${allArticles.filter((article) => article.importance >= 4).length}건`);
+
+    const list = section.createDiv({ cls: "tradir-story-list" });
+    articles.forEach((article, index) => addStory(list, article, index));
   }
 
   private addCategoryFilter(container: HTMLElement, category: string, label: string) {
@@ -1392,6 +1432,18 @@ function addMetric(container: HTMLElement, label: string, value: string) {
   const metric = container.createDiv({ cls: "tradir-metric" });
   metric.createEl("span", { text: label });
   metric.createEl("strong", { text: value });
+}
+
+function addInsight(container: HTMLElement, label: string, value: string) {
+  const card = container.createDiv({ cls: "tradir-insight-card" });
+  card.createEl("span", { text: label });
+  card.createEl("strong", { text: value });
+}
+
+function averageImportance(articles: AnalyzedArticle[]): string {
+  if (!articles.length) return "0.0";
+  const avg = articles.reduce((sum, article) => sum + article.importance, 0) / articles.length;
+  return avg.toFixed(1);
 }
 
 function addTab(container: HTMLElement, label: string, active: boolean) {

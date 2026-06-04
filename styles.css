@@ -563,6 +563,60 @@
   margin-top: 18px;
 }
 
+.tradir-dashboard-view,
+.tradir-mode-section {
+  margin-top: 18px;
+}
+
+.tradir-dashboard-focus {
+  padding: 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.tradir-dashboard-focus h3,
+.tradir-dashboard-focus p {
+  margin: 0;
+}
+
+.tradir-dashboard-focus p {
+  margin-top: 8px;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.tradir-dashboard-cards,
+.tradir-ai-grid,
+.tradir-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0 18px;
+}
+
+.tradir-dashboard-card,
+.tradir-insight-card {
+  padding: 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.tradir-dashboard-card span,
+.tradir-insight-card span {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.tradir-dashboard-card strong,
+.tradir-insight-card strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 20px;
+}
+
 .tradir-report-table td:first-child,
 .tradir-report-table th:first-child {
   text-align: right;
@@ -572,7 +626,10 @@
   .tradir-command-grid,
   .tradir-metric-grid,
   .tradir-briefing-body,
-  .tradir-radar-shell {
+  .tradir-radar-shell,
+  .tradir-dashboard-cards,
+  .tradir-ai-grid,
+  .tradir-insight-grid {
     grid-template-columns: 1fr;
   }
 
