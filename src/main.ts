@@ -57,9 +57,10 @@ interface AiArticleResult {
 }
 
 const DEFAULT_SOURCES = [
-  "CoinDesk|https://www.coindesk.com/arc/outboundfeeds/rss/",
+  "CoinDesk|https://www.coindesk.com/arc/outboundfeeds/rss",
   "Cointelegraph|https://cointelegraph.com/rss",
-  "Yahoo Finance|https://finance.yahoo.com/news/rssindex",
+  "MarketWatch|https://feeds.marketwatch.com/marketwatch/topstories/",
+  "Investing.com Economy|https://www.investing.com/rss/news_25.rss",
 ].join("\n");
 
 const DEFAULT_SETTINGS: TradirSettings = {
@@ -120,6 +121,13 @@ export default class TradirObsdianPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    if (this.settings.sourceText.includes("https://finance.yahoo.com/news/rssindex")) {
+      this.settings.sourceText = this.settings.sourceText.replace(
+        /Yahoo Finance\|https:\/\/finance\.yahoo\.com\/news\/rssindex/g,
+        "MarketWatch|https://feeds.marketwatch.com/marketwatch/topstories/",
+      );
+      await this.saveSettings();
+    }
     if (!this.settings.aiModel) {
       this.settings.aiModel = PROVIDER_DEFAULT_MODELS[this.settings.aiProvider] || "";
     }
@@ -239,14 +247,23 @@ export default class TradirObsdianPlugin extends Plugin {
     }
 
     if (!this.settings.apiKey.trim()) {
-      throw new Error("Add your own AI API key in plugin settings, or set AI provider to None.");
+      new Notice("AI key is empty. Creating an RSS-only briefing without using tokens.");
+      return baseline;
     }
 
-    const prompt = buildAnalysisPrompt(items, this.settings.language);
-    const rawText = await this.callAi(prompt);
-    const parsed = parseAiResults(rawText);
-    if (!parsed.length) {
-      throw new Error("AI response did not contain a JSON array.");
+    let parsed: AiArticleResult[] = [];
+    try {
+      const prompt = buildAnalysisPrompt(items, this.settings.language);
+      const rawText = await this.callAi(prompt);
+      parsed = parseAiResults(rawText);
+      if (!parsed.length) {
+        throw new Error("AI response did not contain a JSON array.");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(`AI analysis failed. Creating RSS-only briefing: ${message}`);
+      console.warn("[Tradir Obsdian] AI analysis failed, falling back to RSS-only", error);
+      return baseline;
     }
 
     const byUrl = new Map(parsed.map((item) => [item.url || "", item]));
