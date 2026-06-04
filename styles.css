@@ -20,24 +20,220 @@
   color: var(--text-muted);
 }
 
-.markdown-preview-view.tradir-report h1 {
-  border-bottom: 2px solid var(--color-accent);
-  padding-bottom: 0.35em;
+.markdown-preview-view.tradir-report {
+  --tradir-border: var(--background-modifier-border);
+  --tradir-card: color-mix(in srgb, var(--background-secondary) 88%, var(--color-base-00));
+  --tradir-soft: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
-.markdown-preview-view.tradir-report h2 {
-  border-bottom: 1px solid var(--background-modifier-border);
-  padding-bottom: 0.25em;
-  margin-top: 1.8em;
+.markdown-preview-view.tradir-report .tradir-dashboard {
+  display: block;
+  max-width: 980px;
+  margin: 0 auto 28px;
+}
+
+.markdown-preview-view.tradir-report .tradir-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+  border: 1px solid var(--tradir-border);
+  border-radius: 8px;
+  padding: 24px;
+  background: linear-gradient(135deg, var(--tradir-card), var(--tradir-soft));
+}
+
+.markdown-preview-view.tradir-report .tradir-kicker {
+  margin: 0 0 8px;
+  color: var(--color-accent);
+  font-size: var(--font-ui-small);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.markdown-preview-view.tradir-report .tradir-hero h1 {
+  margin: 0;
+  border: 0;
+  padding: 0;
+  font-size: 1.8rem;
+  line-height: 1.25;
+}
+
+.markdown-preview-view.tradir-report .tradir-lead {
+  max-width: 680px;
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.markdown-preview-view.tradir-report .tradir-hero-meta {
+  display: grid;
+  gap: 8px;
+  min-width: 150px;
+}
+
+.markdown-preview-view.tradir-report .tradir-hero-meta span,
+.markdown-preview-view.tradir-report .tradir-pill {
+  border: 1px solid var(--tradir-border);
+  border-radius: 999px;
+  padding: 5px 10px;
+  color: var(--text-muted);
+  background: var(--background-primary);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.markdown-preview-view.tradir-report .tradir-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.markdown-preview-view.tradir-report .tradir-metric {
+  border: 1px solid var(--tradir-border);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--tradir-card);
+}
+
+.markdown-preview-view.tradir-report .tradir-metric span,
+.markdown-preview-view.tradir-report .tradir-metric em {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-style: normal;
+}
+
+.markdown-preview-view.tradir-report .tradir-metric strong {
+  display: block;
+  margin: 6px 0 3px;
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.markdown-preview-view.tradir-report .tradir-section {
+  border: 1px solid var(--tradir-border);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+  background: var(--background-primary);
+}
+
+.markdown-preview-view.tradir-report .tradir-section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+
+.markdown-preview-view.tradir-report .tradir-section-head span {
+  color: var(--color-accent);
+  font-size: var(--font-ui-smaller);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.markdown-preview-view.tradir-report .tradir-section-head strong {
+  font-size: 1.05rem;
+}
+
+.markdown-preview-view.tradir-report .tradir-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.markdown-preview-view.tradir-report .tradir-bar-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 5px;
+  font-size: var(--font-ui-small);
+}
+
+.markdown-preview-view.tradir-report .tradir-bar-label em {
+  color: var(--text-muted);
+  font-style: normal;
+}
+
+.markdown-preview-view.tradir-report .tradir-bar-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--background-modifier-border);
+}
+
+.markdown-preview-view.tradir-report .tradir-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+}
+
+.markdown-preview-view.tradir-report .tradir-story-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.markdown-preview-view.tradir-report .tradir-story {
+  border: 1px solid var(--tradir-border);
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--tradir-card);
+}
+
+.markdown-preview-view.tradir-report .tradir-story.is-negative {
+  border-left-color: var(--color-red);
+}
+
+.markdown-preview-view.tradir-report .tradir-story.is-positive {
+  border-left-color: var(--color-green);
+}
+
+.markdown-preview-view.tradir-report .tradir-story.is-neutral {
+  border-left-color: var(--color-yellow);
+}
+
+.markdown-preview-view.tradir-report .tradir-story-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.markdown-preview-view.tradir-report .tradir-rank {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+
+.markdown-preview-view.tradir-report .tradir-story h3 {
+  margin: 10px 0 8px;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.markdown-preview-view.tradir-report .tradir-story p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.markdown-preview-view.tradir-report .tradir-story footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
 }
 
 .markdown-preview-view.tradir-report table {
   width: 100%;
-}
-
-.markdown-preview-view.tradir-report th {
-  color: var(--text-muted);
-  font-weight: 600;
 }
 
 .markdown-preview-view.tradir-report td,
@@ -45,6 +241,18 @@
   padding: 8px 10px;
 }
 
-.markdown-preview-view.tradir-report .callout {
-  border-radius: 8px;
+@media (max-width: 760px) {
+  .markdown-preview-view.tradir-report .tradir-hero,
+  .markdown-preview-view.tradir-report .tradir-section-head {
+    display: block;
+  }
+
+  .markdown-preview-view.tradir-report .tradir-hero-meta {
+    margin-top: 14px;
+  }
+
+  .markdown-preview-view.tradir-report .tradir-metrics,
+  .markdown-preview-view.tradir-report .tradir-story-grid {
+    grid-template-columns: 1fr;
+  }
 }

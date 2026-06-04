@@ -47,7 +47,7 @@ Default mode is RSS-only and uses zero AI tokens.
 
 If AI is enabled but the key is missing or the provider response fails, the plugin falls back to an RSS-only report instead of aborting the briefing.
 
-Briefing notes are formatted as readable Obsidian reports with summary callouts, status tables, category distribution, priority news sections, and an article list. The plugin adds a scoped `tradir-report` CSS class to generated notes.
+Briefing notes are formatted as dashboard-style Obsidian reports with a hero summary, metric cards, category bars, priority story cards, and a full article table. The plugin adds a scoped `tradir-report` CSS class to generated notes.
 
 When AI is enabled, the plugin calls the selected provider directly from Obsidian using the user's own key. API keys are stored in this vault's plugin data, so users should avoid syncing plugin data to places they do not trust.
 

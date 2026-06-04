@@ -422,6 +422,10 @@ export default class TradirObsdianPlugin extends Plugin {
     const sourceCount = new Set(sorted.map((article) => article.source)).size;
     const negativeCount = sorted.filter((article) => article.sentiment === "negative").length;
     const positiveCount = sorted.filter((article) => article.sentiment === "positive").length;
+    const neutralCount = sorted.filter((article) => article.sentiment === "neutral").length;
+    const aiLabel = this.settings.aiProvider === "none"
+      ? "RSS only / tokens 0"
+      : `${this.settings.aiProvider} / ${this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider]}`;
     const lines = [
       "---",
       `title: "Trading News Briefing - ${date}"`,
@@ -434,63 +438,63 @@ export default class TradirObsdianPlugin extends Plugin {
       `cssclasses: ["tradir-report"]`,
       "---",
       "",
-      `# 📡 Trading News Briefing`,
+      `<section class="tradir-dashboard">`,
+      `<header class="tradir-hero">`,
+      `<div class="tradir-hero-copy">`,
+      `<p class="tradir-kicker">Trading News Radar</p>`,
+      `<h1>${escapeHtml(date)} 시장 뉴스 브리핑</h1>`,
+      `<p class="tradir-lead">${escapeHtml(briefingLead(sorted))}</p>`,
+      `</div>`,
+      `<div class="tradir-hero-meta">`,
+      `<span>${escapeHtml(aiLabel)}</span>`,
+      `<span>${articles.length} articles</span>`,
+      `</div>`,
+      `</header>`,
       "",
-      `## ${date} 시장 뉴스 레이더`,
+      `<section class="tradir-metrics">`,
+      metricCard("수집 기사", String(articles.length), "RSS feed items"),
+      metricCard("뉴스 출처", String(sourceCount), "active sources"),
+      metricCard("고중요도", String(highImpact.length), "importance 4-5"),
+      metricCard("부정 신호", String(negativeCount), `${positiveCount} positive / ${neutralCount} neutral`),
+      `</section>`,
       "",
-      "> [!summary] 오늘의 흐름",
-      `> ${briefingLead(sorted)}`,
-      ">",
-      `> 수집 기사 ${articles.length}개, 출처 ${sourceCount}개, 고중요도 ${highImpact.length}개를 기준으로 정리했습니다.`,
+      `<section class="tradir-section">`,
+      `<div class="tradir-section-head">`,
+      `<span>Market Pulse</span>`,
+      `<strong>카테고리 분포</strong>`,
+      `</div>`,
+      `<div class="tradir-bars">`,
+      ...categoryBars(sorted),
+      `</div>`,
+      `</section>`,
       "",
-      "## 📊 브리핑 지표",
+      `<section class="tradir-section">`,
+      `<div class="tradir-section-head">`,
+      `<span>Priority Feed</span>`,
+      `<strong>우선 확인 뉴스</strong>`,
+      `</div>`,
+      `<div class="tradir-story-grid">`,
+      ...sorted.slice(0, 6).map((article, index) => storyCard(article, index)),
+      `</div>`,
+      `</section>`,
       "",
-      "| 지표 | 값 |",
-      "|---|---:|",
-      `| 수집 기사 | ${articles.length} |`,
-      `| 뉴스 출처 | ${sourceCount} |`,
-      `| 고중요도 | ${highImpact.length} |`,
-      `| 긍정 | ${positiveCount} |`,
-      `| 부정 | ${negativeCount} |`,
-      `| AI 분석 | ${this.settings.aiProvider === "none" ? "꺼짐 (토큰 0)" : `${this.settings.aiProvider} / ${this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider]}`} |`,
+      `</section>`,
       "",
-      "## 🧭 카테고리 분포",
+      "## 전체 뉴스 목록",
       "",
-      "| 카테고리 | 기사 | 평균 중요도 |",
-      "|---|---:|---:|",
-      ...categoryRows(sorted),
-      "",
-      "## ⚠️ 우선 확인 뉴스",
-      "",
+      "| 중요도 | 감성 | 카테고리 | 제목 | 출처 |",
+      "|---:|---|---|---|---|",
     ];
 
-    sorted.slice(0, 5).forEach((article, index) => {
+    sorted.forEach((article) => {
       lines.push(
-        `### ${index + 1}. ${sentimentIcon(article.sentiment)} ${article.title}`,
-        "",
-        `> [!${calloutType(article)}] ${categoryLabel(article.category)} · ${importanceStars(article.importance)} · ${sentimentLabel(article.sentiment)}`,
-        `> ${article.summary || article.description || "요약이 없습니다."}`,
-        ">",
-        `> 출처: ${article.source}  `,
-        `> 원문: ${article.url ? `[열기](${article.url})` : "없음"}`,
-        "",
+        `| ${article.importance} | ${sentimentIcon(article.sentiment)} | ${tableCell(categoryLabel(article.category))} | ${article.url ? `[${tableCell(article.title)}](${article.url})` : tableCell(article.title)} | ${tableCell(article.source)} |`,
       );
     });
-
-    if (sorted.length > 5) {
-      lines.push("## 🗞️ 전체 뉴스 목록", "");
-      lines.push("| 중요도 | 감성 | 카테고리 | 제목 | 출처 |");
-      lines.push("|---:|---|---|---|---|");
-      sorted.forEach((article) => {
-        lines.push(
-          `| ${article.importance} | ${sentimentIcon(article.sentiment)} | ${tableCell(categoryLabel(article.category))} | ${article.url ? `[${tableCell(article.title)}](${article.url})` : tableCell(article.title)} | ${tableCell(article.source)} |`,
-        );
-      });
-      lines.push("");
-    }
+    lines.push("");
 
     lines.push(
-      "## 설정",
+      "## 실행 설정",
       "",
       "| 항목 | 값 |",
       "|---|---|",
@@ -874,6 +878,60 @@ function extractGeminiText(json: Record<string, unknown>): string {
     .join("\n");
 }
 
+function metricCard(label: string, value: string, detail: string): string {
+  return [
+    `<article class="tradir-metric">`,
+    `<span>${escapeHtml(label)}</span>`,
+    `<strong>${escapeHtml(value)}</strong>`,
+    `<em>${escapeHtml(detail)}</em>`,
+    `</article>`,
+  ].join("");
+}
+
+function categoryBars(articles: AnalyzedArticle[]): string[] {
+  const groups = new Map<string, AnalyzedArticle[]>();
+  for (const article of articles) {
+    const key = article.category || "trading_other";
+    groups.set(key, [...(groups.get(key) || []), article]);
+  }
+  const max = Math.max(...Array.from(groups.values()).map((group) => group.length), 1);
+
+  return Array.from(groups.entries())
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, 8)
+    .map(([category, group]) => {
+      const width = Math.max(8, Math.round((group.length / max) * 100));
+      const avg = group.reduce((sum, article) => sum + article.importance, 0) / group.length;
+      return [
+        `<div class="tradir-bar-row">`,
+        `<div class="tradir-bar-label"><span>${escapeHtml(categoryLabel(category))}</span><em>${group.length}건 · 중요도 ${avg.toFixed(1)}</em></div>`,
+        `<div class="tradir-bar-track"><div class="tradir-bar-fill" style="width:${width}%"></div></div>`,
+        `</div>`,
+      ].join("");
+    });
+}
+
+function storyCard(article: AnalyzedArticle, index: number): string {
+  const tone = article.sentiment === "negative" ? "is-negative" : article.sentiment === "positive" ? "is-positive" : "is-neutral";
+  const url = article.url ? `<a href="${escapeAttribute(article.url)}">원문</a>` : `<span>원문 없음</span>`;
+  return [
+    `<article class="tradir-story ${tone}">`,
+    `<div class="tradir-story-top">`,
+    `<span class="tradir-rank">${String(index + 1).padStart(2, "0")}</span>`,
+    `<span class="tradir-pill">${escapeHtml(categoryLabel(article.category))}</span>`,
+    `</div>`,
+    `<h3>${escapeHtml(article.title)}</h3>`,
+    `<p>${escapeHtml(article.summary || article.description || "요약이 없습니다.")}</p>`,
+    `<footer>`,
+    `<span>${escapeHtml(article.source)}</span>`,
+    `<span>${escapeHtml(importanceStars(article.importance))}</span>`,
+    `<span>${escapeHtml(sentimentLabel(article.sentiment))}</span>`,
+    url,
+    `</footer>`,
+    `</article>`,
+  ].join("");
+}
+
 function briefingLead(articles: AnalyzedArticle[]): string {
   if (!articles.length) return "수집된 뉴스가 없습니다.";
   const top = articles[0];
@@ -938,6 +996,19 @@ function calloutType(article: AnalyzedArticle): string {
 
 function tableCell(value: string): string {
   return cleanText(value).replace(/\|/g, "\\|") || "-";
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeAttribute(value: string): string {
+  return escapeHtml(value).replace(/`/g, "&#96;");
 }
 
 function assertOk(status: number, provider: string) {
