@@ -1499,7 +1499,12 @@ function addGauge(container: HTMLElement, label: string, value: number) {
   const gauge = card.createDiv({ cls: "tradir-gauge" });
   const safeValue = Math.max(0, Math.min(100, value));
   gauge.setAttr("style", `--angle:${safeValue * 1.8}deg`);
+  gauge.setAttr("title", `${label}: ${safeValue}%`);
   gauge.createDiv({ cls: "tradir-gauge-value", text: `${value}%` });
+  addChartTooltip(card, [
+    [label, `${safeValue}%`],
+    ["중립/부정 포함", `${100 - safeValue}%`],
+  ]);
 }
 
 function addDonut(container: HTMLElement, positive: number, neutral: number, negative: number) {
@@ -1511,11 +1516,26 @@ function addDonut(container: HTMLElement, positive: number, neutral: number, neg
   card.createEl("h3", { text: "감성 분포" });
   const donut = card.createDiv({ cls: "tradir-donut" });
   donut.setAttr("style", `--pos-end:${pos}%;--neu-end:${pos + neu}%`);
+  donut.setAttr("title", `긍정 ${positive}건 (${pos}%), 중립 ${neutral}건 (${neu}%), 부정 ${negative}건 (${neg}%)`);
   donut.createDiv({ cls: "tradir-donut-hole", text: `${pos}%` });
   const legend = card.createDiv({ cls: "tradir-donut-legend" });
   legend.createEl("span", { text: `긍정 ${pos}%` });
   legend.createEl("span", { text: `중립 ${neu}%` });
   legend.createEl("span", { text: `부정 ${neg}%` });
+  addChartTooltip(card, [
+    ["긍정", `${positive}건 · ${pos}%`],
+    ["중립", `${neutral}건 · ${neu}%`],
+    ["부정", `${negative}건 · ${neg}%`],
+  ]);
+}
+
+function addChartTooltip(container: HTMLElement, rows: Array<[string, string]>) {
+  const tooltip = container.createDiv({ cls: "tradir-chart-tooltip" });
+  rows.forEach(([label, value]) => {
+    const row = tooltip.createDiv();
+    row.createEl("span", { text: label });
+    row.createEl("strong", { text: value });
+  });
 }
 
 function categoryCounts(articles: AnalyzedArticle[]): Array<[string, number]> {
