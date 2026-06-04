@@ -411,7 +411,7 @@ export default class TradirObsdianPlugin extends Plugin {
       return baseline;
     }
 
-    if (!this.settings.apiKey.trim()) {
+    if (!normalizeApiKey(this.settings.apiKey)) {
       new Notice("AI key is empty. Creating an RSS-only briefing without using tokens.");
       return baseline;
     }
@@ -547,7 +547,7 @@ export default class TradirObsdianPlugin extends Plugin {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${this.settings.apiKey.trim()}`,
+        Authorization: `Bearer ${normalizeApiKey(this.settings.apiKey)}`,
       },
       body: JSON.stringify(payload),
       throw: false,
@@ -560,7 +560,7 @@ export default class TradirObsdianPlugin extends Plugin {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": this.settings.apiKey.trim(),
+        "x-api-key": normalizeApiKey(this.settings.apiKey),
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
@@ -578,8 +578,9 @@ export default class TradirObsdianPlugin extends Plugin {
 
   private async callGemini(model: string, prompt: string, maxOutputTokens: number): Promise<string> {
     const safeModel = model.startsWith("models/") ? model : `models/${model}`;
+    const apiKey = normalizeApiKey(this.settings.apiKey);
     const response = await requestUrl({
-      url: `https://generativelanguage.googleapis.com/v1beta/${safeModel}:generateContent?key=${encodeURIComponent(this.settings.apiKey.trim())}`,
+      url: `https://generativelanguage.googleapis.com/v1beta/${safeModel}:generateContent?key=${encodeURIComponent(apiKey)}`,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -928,7 +929,7 @@ class TradirSettingTab extends PluginSettingTab {
           .setPlaceholder("Stored in this vault's plugin data")
           .setValue(this.plugin.settings.apiKey)
           .onChange(async (value) => {
-            this.plugin.settings.apiKey = value;
+            this.plugin.settings.apiKey = normalizeApiKey(value);
             await this.plugin.saveSettings();
           });
       });
@@ -1038,10 +1039,16 @@ function formatUsd(value: number): string {
 }
 
 function likelyKeyProviderWarning(provider: AiProvider, key: string): string {
-  const trimmed = key.trim();
+  const trimmed = normalizeApiKey(key);
   if (provider === "none" || !trimmed) return "";
+  if (trimmed.includes("*")) {
+    return "The API key looks masked. Create a new full secret key in the provider dashboard and paste the full value.";
+  }
   if (provider === "openai" && !trimmed.startsWith("sk-")) {
     return "OpenAI selected, but the key does not look like an OpenAI API key. Check provider and key.";
+  }
+  if (provider === "openai" && trimmed.startsWith("sk-proj-") && trimmed.length < 90) {
+    return "The OpenAI project key looks too short. Paste the full secret key value, not the masked dashboard preview.";
   }
   if (provider === "anthropic" && !trimmed.startsWith("sk-ant-")) {
     return "Anthropic selected, but the key does not look like a Claude API key. OpenAI keys will return 401 here.";
@@ -1050,6 +1057,10 @@ function likelyKeyProviderWarning(provider: AiProvider, key: string): string {
     return "Gemini selected, but the key looks like an OpenAI or Anthropic key. Use a Google AI Studio API key.";
   }
   return "";
+}
+
+function normalizeApiKey(input: string): string {
+  return input.replace(/[\s\u200B-\u200D\uFEFF]/g, "");
 }
 
 function parseFeed(xml: string, source: FeedSource): FeedItem[] {

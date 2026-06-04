@@ -55,6 +55,8 @@ OpenAI calls use Chat Completions and automatically retry compatible request sha
 
 Use **Test AI connection** after changing provider, model, or key. A `401` means authentication failed: the key may be revoked, pasted under the wrong provider, missing project billing/permissions, or not an API key for that provider.
 
+API keys are normalized before storage and requests, so accidental spaces, line breaks, or zero-width paste characters are removed. Masked dashboard previews are rejected before making a provider call.
+
 Briefing notes are formatted as clean Obsidian-native Markdown reports with a summary callout, compact metric tables, category distribution, priority story sections, and a full article table. The plugin adds a scoped `tradir-report` CSS class to generated notes.
 
 When AI is enabled, the plugin calls the selected provider directly from Obsidian using the user's own key. API keys are stored in this vault's plugin data, so users should avoid syncing plugin data to places they do not trust.
