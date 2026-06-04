@@ -424,7 +424,7 @@ export default class TradirObsdianPlugin extends Plugin {
     const positiveCount = sorted.filter((article) => article.sentiment === "positive").length;
     const neutralCount = sorted.filter((article) => article.sentiment === "neutral").length;
     const aiLabel = this.settings.aiProvider === "none"
-      ? "RSS only / tokens 0"
+      ? "RSS only, tokens 0"
       : `${this.settings.aiProvider} / ${this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider]}`;
     const lines = [
       "---",
@@ -438,49 +438,36 @@ export default class TradirObsdianPlugin extends Plugin {
       `cssclasses: ["tradir-report"]`,
       "---",
       "",
-      `<section class="tradir-dashboard">`,
-      `<header class="tradir-hero">`,
-      `<div class="tradir-hero-copy">`,
-      `<p class="tradir-kicker">Trading News Radar</p>`,
-      `<h1>${escapeHtml(date)} 시장 뉴스 브리핑</h1>`,
-      `<p class="tradir-lead">${escapeHtml(briefingLead(sorted))}</p>`,
-      `</div>`,
-      `<div class="tradir-hero-meta">`,
-      `<span>${escapeHtml(aiLabel)}</span>`,
-      `<span>${articles.length} articles</span>`,
-      `</div>`,
-      `</header>`,
+      `# Trading News Briefing`,
       "",
-      `<section class="tradir-metrics">`,
-      metricCard("수집 기사", String(articles.length), "RSS feed items"),
-      metricCard("뉴스 출처", String(sourceCount), "active sources"),
-      metricCard("고중요도", String(highImpact.length), "importance 4-5"),
-      metricCard("부정 신호", String(negativeCount), `${positiveCount} positive / ${neutralCount} neutral`),
-      `</section>`,
+      `**${date} 시장 뉴스 레이더**`,
       "",
-      `<section class="tradir-section">`,
-      `<div class="tradir-section-head">`,
-      `<span>Market Pulse</span>`,
-      `<strong>카테고리 분포</strong>`,
-      `</div>`,
-      `<div class="tradir-bars">`,
-      ...categoryBars(sorted),
-      `</div>`,
-      `</section>`,
+      "> [!summary] 요약",
+      `> ${briefingLead(sorted)}`,
+      ">",
+      `> 수집 기사 **${articles.length}개**, 출처 **${sourceCount}개**, 고중요도 **${highImpact.length}개**. AI 분석: **${aiLabel}**.`,
       "",
-      `<section class="tradir-section">`,
-      `<div class="tradir-section-head">`,
-      `<span>Priority Feed</span>`,
-      `<strong>우선 확인 뉴스</strong>`,
-      `</div>`,
-      `<div class="tradir-story-grid">`,
-      ...sorted.slice(0, 6).map((article, index) => storyCard(article, index)),
-      `</div>`,
-      `</section>`,
+      "## 1. 브리핑 지표",
       "",
-      `</section>`,
+      "| 항목 | 값 |",
+      "|---|---:|",
+      `| 수집 기사 | ${articles.length} |`,
+      `| 뉴스 출처 | ${sourceCount} |`,
+      `| 고중요도 | ${highImpact.length} |`,
+      `| 긍정 / 중립 / 부정 | ${positiveCount} / ${neutralCount} / ${negativeCount} |`,
+      `| AI 분석 | ${tableCell(aiLabel)} |`,
       "",
-      "## 전체 뉴스 목록",
+      "## 2. 카테고리 분포",
+      "",
+      "| 카테고리 | 기사 수 | 평균 중요도 |",
+      "|---|---:|---:|",
+      ...categoryRows(sorted),
+      "",
+      "## 3. 우선 확인 뉴스",
+      "",
+      ...priorityStoryBlocks(sorted.slice(0, 7)),
+      "",
+      "## 4. 전체 뉴스 목록",
       "",
       "| 중요도 | 감성 | 카테고리 | 제목 | 출처 |",
       "|---:|---|---|---|---|",
@@ -494,7 +481,7 @@ export default class TradirObsdianPlugin extends Plugin {
     lines.push("");
 
     lines.push(
-      "## 실행 설정",
+      "## 5. 실행 설정",
       "",
       "| 항목 | 값 |",
       "|---|---|",
@@ -878,60 +865,6 @@ function extractGeminiText(json: Record<string, unknown>): string {
     .join("\n");
 }
 
-function metricCard(label: string, value: string, detail: string): string {
-  return [
-    `<article class="tradir-metric">`,
-    `<span>${escapeHtml(label)}</span>`,
-    `<strong>${escapeHtml(value)}</strong>`,
-    `<em>${escapeHtml(detail)}</em>`,
-    `</article>`,
-  ].join("");
-}
-
-function categoryBars(articles: AnalyzedArticle[]): string[] {
-  const groups = new Map<string, AnalyzedArticle[]>();
-  for (const article of articles) {
-    const key = article.category || "trading_other";
-    groups.set(key, [...(groups.get(key) || []), article]);
-  }
-  const max = Math.max(...Array.from(groups.values()).map((group) => group.length), 1);
-
-  return Array.from(groups.entries())
-    .sort((a, b) => b[1].length - a[1].length)
-    .slice(0, 8)
-    .map(([category, group]) => {
-      const width = Math.max(8, Math.round((group.length / max) * 100));
-      const avg = group.reduce((sum, article) => sum + article.importance, 0) / group.length;
-      return [
-        `<div class="tradir-bar-row">`,
-        `<div class="tradir-bar-label"><span>${escapeHtml(categoryLabel(category))}</span><em>${group.length}건 · 중요도 ${avg.toFixed(1)}</em></div>`,
-        `<div class="tradir-bar-track"><div class="tradir-bar-fill" style="width:${width}%"></div></div>`,
-        `</div>`,
-      ].join("");
-    });
-}
-
-function storyCard(article: AnalyzedArticle, index: number): string {
-  const tone = article.sentiment === "negative" ? "is-negative" : article.sentiment === "positive" ? "is-positive" : "is-neutral";
-  const url = article.url ? `<a href="${escapeAttribute(article.url)}">원문</a>` : `<span>원문 없음</span>`;
-  return [
-    `<article class="tradir-story ${tone}">`,
-    `<div class="tradir-story-top">`,
-    `<span class="tradir-rank">${String(index + 1).padStart(2, "0")}</span>`,
-    `<span class="tradir-pill">${escapeHtml(categoryLabel(article.category))}</span>`,
-    `</div>`,
-    `<h3>${escapeHtml(article.title)}</h3>`,
-    `<p>${escapeHtml(article.summary || article.description || "요약이 없습니다.")}</p>`,
-    `<footer>`,
-    `<span>${escapeHtml(article.source)}</span>`,
-    `<span>${escapeHtml(importanceStars(article.importance))}</span>`,
-    `<span>${escapeHtml(sentimentLabel(article.sentiment))}</span>`,
-    url,
-    `</footer>`,
-    `</article>`,
-  ].join("");
-}
-
 function briefingLead(articles: AnalyzedArticle[]): string {
   if (!articles.length) return "수집된 뉴스가 없습니다.";
   const top = articles[0];
@@ -954,6 +887,29 @@ function categoryRows(articles: AnalyzedArticle[]): string[] {
       const avg = group.reduce((sum, article) => sum + article.importance, 0) / group.length;
       return `| ${tableCell(categoryLabel(category))} | ${group.length} | ${avg.toFixed(1)} |`;
     });
+}
+
+function priorityStoryBlocks(articles: AnalyzedArticle[]): string[] {
+  if (!articles.length) return ["_우선 확인 뉴스가 없습니다._"];
+
+  const lines: string[] = [];
+  articles.forEach((article, index) => {
+    lines.push(
+      `### ${index + 1}. ${sentimentIcon(article.sentiment)} ${article.title}`,
+      "",
+      `- **분류**: ${categoryLabel(article.category)}`,
+      `- **중요도**: ${importanceStars(article.importance)} (${article.importance}/5)`,
+      `- **감성**: ${sentimentLabel(article.sentiment)}`,
+      `- **출처**: ${article.source}`,
+      article.url ? `- **원문**: [열기](${article.url})` : "- **원문**: 없음",
+      "",
+      article.summary || article.description || "_요약이 없습니다._",
+      "",
+      "---",
+      "",
+    );
+  });
+  return lines;
 }
 
 function categoryLabel(category: string): string {
@@ -988,27 +944,8 @@ function importanceStars(importance: number): string {
   return "★".repeat(count) + "☆".repeat(5 - count);
 }
 
-function calloutType(article: AnalyzedArticle): string {
-  if (article.importance >= 5 || article.sentiment === "negative") return "warning";
-  if (article.sentiment === "positive") return "success";
-  return "info";
-}
-
 function tableCell(value: string): string {
   return cleanText(value).replace(/\|/g, "\\|") || "-";
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function escapeAttribute(value: string): string {
-  return escapeHtml(value).replace(/`/g, "&#96;");
 }
 
 function assertOk(status: number, provider: string) {
