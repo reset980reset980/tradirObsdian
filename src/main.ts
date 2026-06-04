@@ -1291,7 +1291,7 @@ class TradirBriefingModal extends Modal {
     contentEl.empty();
     contentEl.addClass("tradir-briefing-modal");
 
-    const sorted = [...this.articles].sort((a, b) => effectiveImportance(b) - effectiveImportance(a));
+    const sorted = [...this.articles].sort(compareArticlesForFeed);
     const visible = this.activeCategory === "all"
       ? sorted
       : sorted.filter((article) => (article.category || "trading_other") === this.activeCategory);
@@ -1501,6 +1501,9 @@ function addGauge(container: HTMLElement, label: string, value: number) {
   gauge.setAttr("style", `--angle:${safeValue * 1.8}deg`);
   gauge.setAttr("title", `${label}: ${safeValue}%`);
   gauge.createDiv({ cls: "tradir-gauge-value", text: `${value}%` });
+  const summary = card.createDiv({ cls: "tradir-chart-summary" });
+  summary.createEl("strong", { text: `${safeValue}%` });
+  summary.createEl("span", { text: "긍정 기사 비율" });
   addChartTooltip(card, [
     [label, `${safeValue}%`],
     ["중립/부정 포함", `${100 - safeValue}%`],
@@ -1522,6 +1525,9 @@ function addDonut(container: HTMLElement, positive: number, neutral: number, neg
   legend.createEl("span", { text: `긍정 ${pos}%` });
   legend.createEl("span", { text: `중립 ${neu}%` });
   legend.createEl("span", { text: `부정 ${neg}%` });
+  const summary = card.createDiv({ cls: "tradir-chart-summary" });
+  summary.createEl("strong", { text: `긍정 ${pos}% · 중립 ${neu}% · 부정 ${neg}%` });
+  summary.createEl("span", { text: `${positive + neutral + negative}건 기준` });
   addChartTooltip(card, [
     ["긍정", `${positive}건 · ${pos}%`],
     ["중립", `${neutral}건 · ${neu}%`],
@@ -2083,6 +2089,12 @@ function filterArticles(articles: AnalyzedArticle[], query: string): AnalyzedArt
     ].join(" ").toLowerCase();
     return haystack.includes(normalized);
   });
+}
+
+function compareArticlesForFeed(a: AnalyzedArticle, b: AnalyzedArticle): number {
+  const byDate = timestamp(b.publishedAt) - timestamp(a.publishedAt);
+  if (byDate !== 0) return byDate;
+  return effectiveImportance(b) - effectiveImportance(a);
 }
 
 function readYamlRaw(yaml: string, key: string): string {

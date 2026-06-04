@@ -697,6 +697,20 @@
   font-size: var(--font-ui-small);
 }
 
+.tradir-chart-summary {
+  display: grid;
+  gap: 3px;
+  justify-items: center;
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.tradir-chart-summary strong {
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+}
+
 .tradir-pager {
   display: grid;
   grid-template-columns: minmax(90px, auto) auto minmax(90px, auto);
