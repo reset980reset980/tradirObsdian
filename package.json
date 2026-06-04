@@ -1,0 +1,25 @@
+{
+  "name": "tradir-obsdian",
+  "version": "0.1.0",
+  "description": "Obsidian plugin for importing Trading News Radar content into notes.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs --watch",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": [
+    "obsidian",
+    "trading",
+    "news",
+    "brat"
+  ],
+  "author": "reset980",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "builtin-modules": "^5.0.0",
+    "esbuild": "^0.25.5",
+    "obsidian": "^1.8.7",
+    "typescript": "^5.8.3"
+  }
+}
