@@ -76,7 +76,7 @@ const DEFAULT_SETTINGS: TradirSettings = {
 
 const PROVIDER_DEFAULT_MODELS: Record<AiProvider, string> = {
   none: "",
-  openai: "gpt-5",
+  openai: "gpt-4.1-mini",
   anthropic: "claude-sonnet-4-20250514",
   gemini: "gemini-2.5-flash",
 };
@@ -126,6 +126,10 @@ export default class TradirObsdianPlugin extends Plugin {
         /Yahoo Finance\|https:\/\/finance\.yahoo\.com\/news\/rssindex/g,
         "MarketWatch|https://feeds.marketwatch.com/marketwatch/topstories/",
       );
+      await this.saveSettings();
+    }
+    if (this.settings.aiProvider === "openai" && this.settings.aiModel === "gpt-5") {
+      this.settings.aiModel = PROVIDER_DEFAULT_MODELS.openai;
       await this.saveSettings();
     }
     if (!this.settings.aiModel) {
@@ -261,7 +265,7 @@ export default class TradirObsdianPlugin extends Plugin {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      new Notice(`AI analysis failed. Creating RSS-only briefing: ${message}`);
+      new Notice(`AI analysis failed. RSS-only report created. ${message}`);
       console.warn("[Tradir Obsdian] AI analysis failed, falling back to RSS-only", error);
       return baseline;
     }
@@ -315,7 +319,7 @@ export default class TradirObsdianPlugin extends Plugin {
       throw: false,
     });
 
-    assertOk(response.status, "OpenAI");
+    assertOk(response.status, "OpenAI", response.text);
     const json = response.json as Record<string, unknown>;
     return extractOpenAIText(json);
   }
@@ -337,7 +341,7 @@ export default class TradirObsdianPlugin extends Plugin {
       throw: false,
     });
 
-    assertOk(response.status, "Anthropic");
+    assertOk(response.status, "Anthropic", response.text);
     const json = response.json as Record<string, unknown>;
     return extractAnthropicText(json);
   }
@@ -360,7 +364,7 @@ export default class TradirObsdianPlugin extends Plugin {
       throw: false,
     });
 
-    assertOk(response.status, "Gemini");
+    assertOk(response.status, "Gemini", response.text);
     const json = response.json as Record<string, unknown>;
     return extractGeminiText(json);
   }
@@ -948,10 +952,22 @@ function tableCell(value: string): string {
   return cleanText(value).replace(/\|/g, "\\|") || "-";
 }
 
-function assertOk(status: number, provider: string) {
+function assertOk(status: number, provider: string, body?: string) {
   if (status < 200 || status >= 300) {
-    throw new Error(`${provider} API returned HTTP ${status}`);
+    const detail = summarizeProviderError(body);
+    throw new Error(`${provider} HTTP ${status}${detail ? `: ${detail}` : ""}`);
   }
+}
+
+function summarizeProviderError(body?: string): string {
+  if (!body) return "";
+  const parsed = tryParseJson(body);
+  if (isObject(parsed)) {
+    const error = parsed.error;
+    if (isObject(error) && typeof error.message === "string") return error.message.slice(0, 180);
+    if (typeof parsed.message === "string") return parsed.message.slice(0, 180);
+  }
+  return cleanText(body).slice(0, 180);
 }
 
 function dedupeByUrl(items: FeedItem[]): FeedItem[] {
