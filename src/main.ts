@@ -14,6 +14,7 @@ import {
 type AiProvider = "none" | "openai" | "anthropic" | "gemini";
 type Sentiment = "positive" | "neutral" | "negative";
 type PresetTier = "lowest" | "balanced" | "latest";
+type RadarMode = "dashboard" | "feed" | "ai" | "insight";
 
 interface TradirSettings {
   outputFolder: string;
@@ -387,8 +388,17 @@ export default class TradirObsdianPlugin extends Plugin {
         return;
       }
 
-      const analyzed = await this.analyzeItems(items);
-      new TradirBriefingModal(this.app, analyzed, this.settings, "feed").open();
+      if (this.settings.aiProvider === "none") {
+        throw new Error("Translation requires an AI provider. Set OpenAI, Anthropic, or Gemini in plugin settings.");
+      }
+      const keyWarning = likelyKeyProviderWarning(this.settings.aiProvider, this.settings.apiKey);
+      if (keyWarning) {
+        throw new Error(keyWarning);
+      }
+      await this.testProviderAuth();
+
+      const analyzed = await this.analyzeItems(items, false);
+      new TradirBriefingModal(this.app, this, analyzed, "feed").open();
       new Notice(`Opened translated news feed with ${analyzed.length} item${analyzed.length === 1 ? "" : "s"}.`);
       this.setStatus("Translated");
     } catch (error) {
@@ -414,7 +424,7 @@ export default class TradirObsdianPlugin extends Plugin {
       }
       await this.writeBriefingNote(analyzed);
       await this.refreshIndex();
-      new TradirBriefingModal(this.app, analyzed, this.settings, "feed").open();
+      new TradirBriefingModal(this.app, this, analyzed, "feed").open();
       new Notice(`Completed one-click workflow for ${analyzed.length} item${analyzed.length === 1 ? "" : "s"}.`);
       this.setStatus("Done");
     } catch (error) {
@@ -438,7 +448,7 @@ export default class TradirObsdianPlugin extends Plugin {
       await this.refreshIndex();
       new Notice("Created trading news briefing.");
       this.setStatus("Briefing done");
-      new TradirBriefingModal(this.app, analyzed, this.settings, "briefing").open();
+      new TradirBriefingModal(this.app, this, analyzed, "insight").open();
     } catch (error) {
       this.handleError("Could not create briefing", error);
     }
@@ -482,7 +492,7 @@ export default class TradirObsdianPlugin extends Plugin {
     return parseFeed(response.text, source);
   }
 
-  private async analyzeItems(items: FeedItem[]): Promise<AnalyzedArticle[]> {
+  private async analyzeItems(items: FeedItem[], fallbackOnError = true): Promise<AnalyzedArticle[]> {
     const baseline = items.map((item) => fallbackAnalysis(item));
     if (this.settings.aiProvider === "none") {
       return baseline;
@@ -502,6 +512,9 @@ export default class TradirObsdianPlugin extends Plugin {
         throw new Error("AI response did not contain a JSON array.");
       }
     } catch (error) {
+      if (!fallbackOnError) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
       new Notice(`AI analysis failed. RSS-only report created. ${message}`);
       console.warn("[Tradir Obsdian] AI analysis failed, falling back to RSS-only", error);
@@ -1096,6 +1109,8 @@ class TradirSettingTab extends PluginSettingTab {
 }
 
 class TradirCommandModal extends Modal {
+  private statusEl: HTMLElement | null = null;
+
   constructor(app: App, private plugin: TradirObsdianPlugin) {
     super(app);
   }
@@ -1164,6 +1179,7 @@ class TradirCommandModal extends Modal {
     meta.createEl("span", { text: `Provider: ${this.plugin.settings.aiProvider}` });
     meta.createEl("span", { text: `Model: ${this.plugin.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.plugin.settings.aiProvider] || "N/A"}` });
     meta.createEl("span", { text: `Limit: ${this.plugin.settings.defaultLimit}` });
+    this.statusEl = contentEl.createDiv({ cls: "tradir-command-status", text: "대기 중" });
 
     const footer = contentEl.createDiv({ cls: "tradir-command-footer" });
     const settingsButton = footer.createEl("button", { cls: "tradir-secondary-button", text: "설정 열기" });
@@ -1193,23 +1209,35 @@ class TradirCommandModal extends Modal {
     button.addEventListener("click", async () => {
       button.disabled = true;
       button.addClass("is-running");
+      this.setPanelStatus(`${action.title} 실행 중...`);
       try {
-        this.close();
         await action.run();
+        this.setPanelStatus(`${action.title} 완료`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.setPanelStatus(`${action.title} 실패: ${message}`);
+        throw error;
       } finally {
         button.disabled = false;
         button.removeClass("is-running");
       }
     });
   }
+
+  private setPanelStatus(text: string) {
+    if (!this.statusEl) return;
+    this.statusEl.setText(text);
+  }
 }
 
 class TradirBriefingModal extends Modal {
+  private activeCategory = "all";
+
   constructor(
     app: App,
+    private plugin: TradirObsdianPlugin,
     private articles: AnalyzedArticle[],
-    private settings: TradirSettings,
-    private activeMode: "dashboard" | "feed" | "briefing" = "dashboard",
+    private activeMode: RadarMode = "dashboard",
   ) {
     super(app);
   }
@@ -1225,29 +1253,19 @@ class TradirBriefingModal extends Modal {
     const highImpact = sorted.filter((article) => article.importance >= 4).length;
     const positiveCount = sorted.filter((article) => article.sentiment === "positive").length;
     const positiveRate = sorted.length ? Math.round((positiveCount / sorted.length) * 100) : 0;
-    const model = this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider] || "N/A";
+    const model = this.plugin.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.plugin.settings.aiProvider] || "N/A";
+    const visible = this.activeCategory === "all"
+      ? sorted
+      : sorted.filter((article) => (article.category || "trading_other") === this.activeCategory);
+    const modeArticles = this.getModeArticles(visible);
 
-    const shell = contentEl.createDiv({ cls: "tradir-radar-shell" });
-    const rail = shell.createDiv({ cls: "tradir-radar-rail" });
-    rail.createEl("h2", { text: "AI News Radar" });
-    rail.createEl("p", { text: this.settings.aiProvider === "none" ? "RSS only" : `${this.settings.aiProvider} · ${model}` });
-    const railActions = rail.createDiv({ cls: "tradir-rail-actions" });
-    ["수집", "AI 처리", "브리핑", "번역"].forEach((label) => railActions.createEl("span", { text: label }));
-    rail.createEl("button", { cls: "tradir-rail-primary", text: "원클릭 전체 실행" });
-    rail.querySelector(".tradir-rail-primary")?.addEventListener("click", () => {
-      this.close();
-      new Notice("Run one-click from the Tradir command panel.");
-    });
-    const railMeta = rail.createDiv({ cls: "tradir-rail-meta" });
-    railMeta.createEl("span", { text: `${sorted.length}개 수집` });
-    railMeta.createEl("span", { text: `${sorted.length}개 분석` });
-
+    const shell = contentEl.createDiv({ cls: "tradir-radar-shell is-report-only" });
     const main = shell.createDiv({ cls: "tradir-radar-main" });
     const header = main.createDiv({ cls: "tradir-briefing-hero" });
     const eyebrow = header.createDiv({ cls: "tradir-briefing-eyebrow", text: today() });
     eyebrow.createSpan({ text: " · AI News Radar" });
-    header.createEl("h2", { text: this.activeMode === "feed" ? `뉴스 (${sorted.length}개)` : "시장 뉴스 브리핑" });
-    header.createEl("p", { text: briefingLead(sorted) });
+    header.createEl("h2", { text: this.getModeTitle(modeArticles.length) });
+    header.createEl("p", { text: this.getModeDescription(sorted) });
 
     const metrics = header.createDiv({ cls: "tradir-metric-grid" });
     addMetric(metrics, "기사", String(sorted.length));
@@ -1256,20 +1274,22 @@ class TradirBriefingModal extends Modal {
     addMetric(metrics, "소스", String(sourceCount));
 
     const tabs = header.createDiv({ cls: "tradir-radar-tabs" });
-    addTab(tabs, "대시보드", this.activeMode === "dashboard");
-    addTab(tabs, "뉴스피드", this.activeMode === "feed");
-    addTab(tabs, "AI", false);
-    addTab(tabs, "인사이트", this.activeMode === "briefing");
+    this.addModeTab(tabs, "dashboard", "대시보드");
+    this.addModeTab(tabs, "feed", "뉴스피드");
+    this.addModeTab(tabs, "ai", "AI");
+    this.addModeTab(tabs, "insight", "인사이트");
 
     const filters = header.createDiv({ cls: "tradir-filter-row" });
-    addFilter(filters, `전체 (${sorted.length})`, true);
-    categoryCounts(sorted).forEach(([category, count]) => addFilter(filters, `${categoryLabel(category)} (${count})`, false));
+    this.addCategoryFilter(filters, "all", `전체 (${sorted.length})`);
+    categoryCounts(sorted).forEach(([category, count]) => {
+      this.addCategoryFilter(filters, category, `${categoryLabel(category)} (${count})`);
+    });
 
     const body = main.createDiv({ cls: "tradir-briefing-body" });
     const left = body.createDiv({ cls: "tradir-briefing-main" });
-    left.createEl("h3", { text: this.activeMode === "feed" ? `뉴스 (${sorted.length}개)` : "우선 확인 뉴스" });
+    left.createEl("h3", { text: this.getSectionTitle(modeArticles.length) });
     const storyList = left.createDiv({ cls: "tradir-story-list" });
-    sorted.slice(0, this.activeMode === "feed" ? sorted.length : 10).forEach((article, index) => addStory(storyList, article, index));
+    modeArticles.forEach((article, index) => addStory(storyList, article, index));
 
     const side = body.createDiv({ cls: "tradir-briefing-side" });
     side.createEl("h3", { text: "카테고리" });
@@ -1279,16 +1299,16 @@ class TradirBriefingModal extends Modal {
 
     side.createEl("h3", { text: "실행 설정" });
     const settingsTable = side.createEl("table", { cls: "tradir-mini-table" });
-    addKeyValueRow(settingsTable, "Provider", this.settings.aiProvider);
+    addKeyValueRow(settingsTable, "Provider", this.plugin.settings.aiProvider);
     addKeyValueRow(settingsTable, "Model", model);
-    addKeyValueRow(settingsTable, "RSS limit", String(this.settings.defaultLimit));
+    addKeyValueRow(settingsTable, "RSS limit", String(this.plugin.settings.defaultLimit));
 
     const all = main.createDiv({ cls: "tradir-full-list" });
     all.createEl("h3", { text: "전체 뉴스" });
     const table = all.createEl("table", { cls: "tradir-report-table" });
     addTableHead(table, ["중요도", "감성", "카테고리", "제목", "출처"]);
     const tbody = table.createEl("tbody");
-    sorted.forEach((article) => {
+    modeArticles.forEach((article) => {
       const row = tbody.createEl("tr");
       row.createEl("td", { text: String(article.importance) });
       row.createEl("td", { text: sentimentLabel(article.sentiment) });
@@ -1304,6 +1324,60 @@ class TradirBriefingModal extends Modal {
       }
       row.createEl("td", { text: article.source });
     });
+  }
+
+  private addCategoryFilter(container: HTMLElement, category: string, label: string) {
+    const button = container.createEl("button", {
+      cls: `tradir-filter${this.activeCategory === category ? " is-active" : ""}`,
+      text: label,
+    });
+    button.addEventListener("click", () => {
+      this.activeCategory = category;
+      this.onOpen();
+    });
+  }
+
+  private addModeTab(container: HTMLElement, mode: RadarMode, label: string) {
+    const button = container.createEl("button", {
+      cls: `tradir-tab${this.activeMode === mode ? " is-active" : ""}`,
+      text: label,
+    });
+    button.addEventListener("click", () => {
+      this.activeMode = mode;
+      this.onOpen();
+    });
+  }
+
+  private getModeArticles(articles: AnalyzedArticle[]): AnalyzedArticle[] {
+    if (this.activeMode === "feed") return articles;
+    if (this.activeMode === "ai") return articles.filter((article) => article.summary || article.tags.length).slice(0, 20);
+    if (this.activeMode === "insight") {
+      const high = articles.filter((article) => article.importance >= 4);
+      return (high.length ? high : articles).slice(0, 15);
+    }
+    return articles.slice(0, 10);
+  }
+
+  private getModeTitle(count: number): string {
+    if (this.activeMode === "feed") return `뉴스피드 (${count}개)`;
+    if (this.activeMode === "ai") return `AI 처리 결과 (${count}개)`;
+    if (this.activeMode === "insight") return `인사이트 (${count}개)`;
+    return "대시보드";
+  }
+
+  private getSectionTitle(count: number): string {
+    const category = this.activeCategory === "all" ? "" : `${categoryLabel(this.activeCategory)} · `;
+    if (this.activeMode === "feed") return `${category}전체 뉴스 (${count}개)`;
+    if (this.activeMode === "ai") return `${category}AI 분석 뉴스 (${count}개)`;
+    if (this.activeMode === "insight") return `${category}고중요도 뉴스 (${count}개)`;
+    return `${category}우선 확인 뉴스 (${count}개)`;
+  }
+
+  private getModeDescription(articles: AnalyzedArticle[]): string {
+    if (this.activeMode === "feed") return "번역된 제목과 원문 제목을 함께 보는 뉴스 카드 목록입니다.";
+    if (this.activeMode === "ai") return "AI가 분류한 카테고리, 중요도, 감성, 태그를 중심으로 확인합니다.";
+    if (this.activeMode === "insight") return "중요도 높은 뉴스와 시장 영향 가능성이 큰 항목을 먼저 봅니다.";
+    return briefingLead(articles);
   }
 }
 

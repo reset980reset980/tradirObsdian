@@ -142,6 +142,10 @@
   background: var(--background-secondary-alt);
 }
 
+.tradir-action-tile.is-running {
+  outline: 2px solid color-mix(in srgb, var(--interactive-accent) 35%, transparent);
+}
+
 .tradir-action-tile.is-primary {
   border-color: color-mix(in srgb, var(--interactive-accent) 55%, var(--background-modifier-border));
   background: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-secondary));
@@ -191,6 +195,16 @@
   background: var(--background-secondary);
 }
 
+.tradir-command-status {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 7px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
 .tradir-command-footer {
   display: flex;
   justify-content: flex-end;
@@ -215,6 +229,10 @@
   border-radius: 8px;
   overflow: hidden;
   background: var(--background-primary);
+}
+
+.tradir-radar-shell.is-report-only {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .tradir-radar-rail {
@@ -245,7 +263,7 @@
   border-top: 1px solid var(--background-modifier-border);
 }
 
-.tradir-rail-actions span,
+.tradir-rail-actions button,
 .tradir-rail-primary {
   display: grid;
   place-items: center;
@@ -254,6 +272,16 @@
   border-radius: 7px;
   background: var(--background-primary);
   font-weight: 700;
+}
+
+.tradir-rail-actions button:hover,
+.tradir-rail-primary:hover {
+  border-color: var(--interactive-accent);
+}
+
+.tradir-rail-actions button.is-running,
+.tradir-rail-primary.is-running {
+  outline: 2px solid color-mix(in srgb, var(--interactive-accent) 35%, transparent);
 }
 
 .tradir-rail-primary {
@@ -273,6 +301,12 @@
 .tradir-rail-meta span {
   display: block;
   margin-top: 5px;
+}
+
+.tradir-rail-status {
+  padding-top: 8px;
+  color: var(--interactive-accent);
+  font-weight: 700;
 }
 
 .tradir-radar-main {
@@ -310,9 +344,16 @@
 
 .tradir-tab {
   padding: 8px 14px;
+  border: 0;
   border-bottom: 2px solid transparent;
+  background: transparent;
   color: var(--text-muted);
   font-weight: 700;
+  cursor: pointer;
+}
+
+.tradir-tab:hover {
+  color: var(--text-normal);
 }
 
 .tradir-tab.is-active {
@@ -324,8 +365,14 @@
   padding: 5px 9px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 999px;
+  background: var(--background-primary);
   color: var(--text-muted);
   font-size: var(--font-ui-small);
+  cursor: pointer;
+}
+
+.tradir-filter:hover {
+  border-color: var(--interactive-accent);
 }
 
 .tradir-filter.is-active {
