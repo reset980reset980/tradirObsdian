@@ -298,6 +298,8 @@ export default class TradirObsdianPlugin extends Plugin {
         throw new Error(keyWarning);
       }
 
+      await this.testProviderAuth();
+
       const sample: FeedItem = {
         id: "test",
         source: "Tradir test",
@@ -316,6 +318,22 @@ export default class TradirObsdianPlugin extends Plugin {
       this.setStatus("AI OK");
     } catch (error) {
       this.handleError("AI connection failed", error);
+    }
+  }
+
+  private async testProviderAuth(): Promise<void> {
+    if (this.settings.aiProvider !== "openai") return;
+    const response = await requestUrl({
+      url: "https://api.openai.com/v1/models",
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${normalizeApiKey(this.settings.apiKey)}`,
+      },
+      throw: false,
+    });
+    if (response.status < 200 || response.status >= 300) {
+      const detail = summarizeProviderError(response.text);
+      throw new Error(`OpenAI auth check failed before model call. HTTP ${response.status}${detail ? `: ${detail}` : ""} ${providerAuthHint("OpenAI")}`);
     }
   }
 
@@ -932,7 +950,25 @@ class TradirSettingTab extends PluginSettingTab {
             this.plugin.settings.apiKey = normalizeApiKey(value);
             await this.plugin.saveSettings();
           });
-      });
+      })
+      .addButton((button) =>
+        button
+          .setButtonText("Clear key")
+          .onClick(async () => {
+            this.plugin.settings.apiKey = "";
+            await this.plugin.saveSettings();
+            this.display();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Key diagnostic")
+      .setDesc(formatKeyDiagnostic(this.plugin.settings.apiKey))
+      .addButton((button) =>
+        button
+          .setButtonText("Refresh")
+          .onClick(() => this.display()),
+      );
 
     new Setting(containerEl)
       .setName("Briefing language")
@@ -1036,6 +1072,15 @@ function formatPresetDetails(preset?: ModelPreset): string {
 
 function formatUsd(value: number): string {
   return value >= 1 ? value.toFixed(2) : value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatKeyDiagnostic(key: string): string {
+  const normalized = normalizeApiKey(key);
+  if (!normalized) return "No API key stored.";
+  const prefix = normalized.slice(0, 8);
+  const suffix = normalized.slice(-4);
+  const masked = normalized.includes("*") ? " masked value detected." : "";
+  return `Stored key shape: ${prefix}...${suffix}, length ${normalized.length}.${masked}`;
 }
 
 function likelyKeyProviderWarning(provider: AiProvider, key: string): string {
