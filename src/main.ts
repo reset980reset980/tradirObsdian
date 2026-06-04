@@ -5,57 +5,79 @@ import {
   PluginSettingTab,
   requestUrl,
   Setting,
-  TFolder,
   TFile,
+  TFolder,
   normalizePath,
 } from "obsidian";
 
+type AiProvider = "none" | "openai" | "anthropic" | "gemini";
+type Sentiment = "positive" | "neutral" | "negative";
+
 interface TradirSettings {
-  endpoint: string;
-  apiToken: string;
   outputFolder: string;
+  sourceText: string;
   defaultLimit: number;
+  aiProvider: AiProvider;
+  aiModel: string;
+  apiKey: string;
+  maxOutputTokens: number;
+  language: string;
 }
 
-interface TradingArticle {
-  id?: string;
-  title?: string;
-  title_ko?: string;
+interface FeedSource {
+  name: string;
+  url: string;
+}
+
+interface FeedItem {
+  id: string;
+  source: string;
+  title: string;
+  url: string;
+  description: string;
+  publishedAt: string;
+}
+
+interface AnalyzedArticle extends FeedItem {
+  summary: string;
+  category: string;
+  importance: number;
+  sentiment: Sentiment;
+  tags: string[];
+}
+
+interface AiArticleResult {
   url?: string;
-  source_id?: string;
-  source?: string;
+  title?: string;
+  summary?: string;
   category?: string;
   importance?: number;
-  sentiment?: string;
-  published_at?: string;
-  crawled_at?: string;
-  summary_text?: string;
-  summary_ko?: string;
+  sentiment?: Sentiment;
   tags?: string[];
 }
 
-interface BriefingItem {
-  headline?: string;
-  title?: string;
-  why_important?: string;
-  summary?: string;
-  article_id?: string;
-  url?: string;
-}
-
-interface TradingBriefing {
-  id?: string;
-  date?: string;
-  summary?: string;
-  top_articles?: BriefingItem[];
-  created_at?: string;
-}
+const DEFAULT_SOURCES = [
+  "CoinDesk|https://www.coindesk.com/arc/outboundfeeds/rss/",
+  "Cointelegraph|https://cointelegraph.com/rss",
+  "Yahoo Finance|https://finance.yahoo.com/news/rssindex",
+].join("\n");
 
 const DEFAULT_SETTINGS: TradirSettings = {
-  endpoint: "https://tnews.xsw.kr",
-  apiToken: "",
   outputFolder: "Trading News Radar",
+  sourceText: DEFAULT_SOURCES,
   defaultLimit: 10,
+  aiProvider: "none",
+  aiModel: "",
+  apiKey: "",
+  maxOutputTokens: 1800,
+  language: "Korean",
+};
+
+const PROVIDER_DEFAULT_MODELS: Record<AiProvider, string> = {
+  none: "",
+  openai: "gpt-5",
+  anthropic: "claude-sonnet-4-20250514",
+  gemini: "gemini-2.5-flash",
 };
 
 export default class TradirObsdianPlugin extends Plugin {
@@ -64,30 +86,29 @@ export default class TradirObsdianPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
-
     this.statusEl = this.addStatusBarItem();
     this.setStatus("Ready");
 
-    this.addRibbonIcon("newspaper", "Sync latest trading news", () => {
-      void this.syncLatestArticles();
+    this.addRibbonIcon("newspaper", "Collect trading news", () => {
+      void this.collectLatestNews();
     });
 
     this.addCommand({
-      id: "sync-latest-trading-news",
-      name: "Sync latest trading news",
-      callback: () => void this.syncLatestArticles(),
+      id: "collect-latest-news",
+      name: "Collect latest trading news",
+      callback: () => void this.collectLatestNews(),
     });
 
     this.addCommand({
-      id: "import-today-briefing",
-      name: "Import today's briefing",
-      callback: () => void this.importTodayBriefing(),
+      id: "create-daily-briefing",
+      name: "Create daily trading news briefing",
+      callback: () => void this.createDailyBriefing(),
     });
 
     this.addCommand({
-      id: "test-trading-news-connection",
-      name: "Test Trading News Radar connection",
-      callback: () => void this.testConnection(),
+      id: "test-rss-sources",
+      name: "Test RSS sources",
+      callback: () => void this.testSources(),
     });
 
     this.addSettingTab(new TradirSettingTab(this.app, this));
@@ -99,188 +120,311 @@ export default class TradirObsdianPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    if (!this.settings.aiModel) {
+      this.settings.aiModel = PROVIDER_DEFAULT_MODELS[this.settings.aiProvider] || "";
+    }
   }
 
   async saveSettings() {
     await this.saveData(this.settings);
   }
 
-  private setStatus(text: string) {
-    if (!this.statusEl) return;
-    this.statusEl.setText(`Tradir: ${text}`);
-    this.statusEl.addClass("tradir-obsdian-status");
-  }
-
-  async testConnection() {
+  async testSources() {
     try {
-      this.setStatus("Testing");
-      const status = await this.fetchJson<Record<string, unknown>>("/api/status");
-      new Notice(`Trading News Radar connected: ${JSON.stringify(status).slice(0, 120)}`);
-      this.setStatus("Connected");
+      this.setStatus("Testing RSS");
+      const sources = parseSources(this.settings.sourceText);
+      if (!sources.length) {
+        throw new Error("Add at least one RSS source in settings.");
+      }
+
+      const first = sources[0];
+      const items = await this.fetchSource(first);
+      new Notice(`${first.name}: ${items.length} item${items.length === 1 ? "" : "s"} found.`);
+      this.setStatus("RSS OK");
     } catch (error) {
-      this.handleError("Could not connect to Trading News Radar", error);
+      this.handleError("RSS test failed", error);
     }
   }
 
-  async syncLatestArticles() {
+  async collectLatestNews() {
     try {
-      this.setStatus("Syncing");
-      const articles = await this.fetchArticles(this.settings.defaultLimit);
-      if (!articles.length) {
-        new Notice("No trading news articles returned.");
-        this.setStatus("No articles");
+      this.setStatus("Collecting");
+      const items = await this.collectFeedItems();
+      if (!items.length) {
+        new Notice("No RSS items found.");
+        this.setStatus("No news");
         return;
       }
 
-      await this.ensureFolder(this.settings.outputFolder);
+      const analyzed = await this.analyzeItems(items);
+      await this.ensureFolder(`${this.settings.outputFolder}/Articles`);
+
       let count = 0;
-      for (const article of articles) {
+      for (const article of analyzed) {
         await this.writeArticleNote(article);
         count += 1;
       }
 
       await this.refreshIndex();
-      new Notice(`Imported ${count} trading news article${count === 1 ? "" : "s"}.`);
+      new Notice(`Imported ${count} trading news note${count === 1 ? "" : "s"}.`);
       this.setStatus(`Imported ${count}`);
     } catch (error) {
-      this.handleError("Could not sync trading news", error);
+      this.handleError("Could not collect trading news", error);
     }
   }
 
-  async importTodayBriefing() {
+  async createDailyBriefing() {
     try {
       this.setStatus("Briefing");
-      const briefing = await this.fetchJson<TradingBriefing>("/api/briefing/today");
-      await this.ensureFolder(this.settings.outputFolder);
-      await this.writeBriefingNote(briefing);
+      const items = await this.collectFeedItems();
+      if (!items.length) {
+        new Notice("No RSS items found for briefing.");
+        this.setStatus("No news");
+        return;
+      }
+
+      const analyzed = await this.analyzeItems(items);
+      await this.ensureFolder(`${this.settings.outputFolder}/Briefings`);
+      await this.writeBriefingNote(analyzed);
       await this.refreshIndex();
-      new Notice("Imported today's trading briefing.");
-      this.setStatus("Briefing imported");
+      new Notice("Created trading news briefing.");
+      this.setStatus("Briefing done");
     } catch (error) {
-      this.handleError("Could not import today's briefing", error);
+      this.handleError("Could not create briefing", error);
     }
   }
 
-  private async fetchArticles(limit: number): Promise<TradingArticle[]> {
-    const response = await this.fetchJson<unknown>(`/api/articles?limit=${encodeURIComponent(String(limit))}`);
-    if (Array.isArray(response)) return response as TradingArticle[];
-    if (isObject(response) && Array.isArray(response.articles)) return response.articles as TradingArticle[];
-    if (isObject(response) && Array.isArray(response.items)) return response.items as TradingArticle[];
-    return [];
-  }
-
-  private async fetchJson<T>(path: string): Promise<T> {
-    const endpoint = this.settings.endpoint.replace(/\/+$/, "");
-    const url = `${endpoint}${path.startsWith("/") ? path : `/${path}`}`;
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-    };
-
-    if (this.settings.apiToken.trim()) {
-      headers.Authorization = `Bearer ${this.settings.apiToken.trim()}`;
+  private async collectFeedItems(): Promise<FeedItem[]> {
+    const sources = parseSources(this.settings.sourceText);
+    if (!sources.length) {
+      throw new Error("Add at least one RSS source in settings.");
     }
 
+    const collected: FeedItem[] = [];
+    for (const source of sources) {
+      try {
+        const items = await this.fetchSource(source);
+        collected.push(...items);
+      } catch (error) {
+        console.warn(`[Tradir Obsdian] Failed RSS source ${source.name}`, error);
+      }
+    }
+
+    return dedupeByUrl(collected)
+      .sort((a, b) => timestamp(b.publishedAt) - timestamp(a.publishedAt))
+      .slice(0, Math.max(1, this.settings.defaultLimit));
+  }
+
+  private async fetchSource(source: FeedSource): Promise<FeedItem[]> {
     const response = await requestUrl({
-      url,
+      url: source.url,
       method: "GET",
-      headers,
+      headers: {
+        Accept: "application/rss+xml, application/xml, text/xml, */*",
+      },
       throw: false,
     });
 
     if (response.status < 200 || response.status >= 300) {
-      throw new Error(`HTTP ${response.status} from ${url}`);
+      throw new Error(`HTTP ${response.status} from ${source.url}`);
     }
 
-    const contentType = response.headers["content-type"] || response.headers["Content-Type"] || "";
-    if (!contentType.includes("application/json") && typeof response.json === "undefined") {
-      throw new Error(`Expected JSON from ${url}`);
-    }
-
-    return response.json as T;
+    return parseFeed(response.text, source);
   }
 
-  private async writeArticleNote(article: TradingArticle) {
-    const title = article.title_ko || article.title || "Untitled trading news";
-    const date = getDatePart(article.published_at || article.crawled_at) || today();
-    const id = article.id || hashString(`${title}:${article.url || ""}`);
-    const fileName = `${date} ${sanitizeFileName(title).slice(0, 90)}.md`;
+  private async analyzeItems(items: FeedItem[]): Promise<AnalyzedArticle[]> {
+    const baseline = items.map((item) => fallbackAnalysis(item));
+    if (this.settings.aiProvider === "none") {
+      return baseline;
+    }
+
+    if (!this.settings.apiKey.trim()) {
+      throw new Error("Add your own AI API key in plugin settings, or set AI provider to None.");
+    }
+
+    const prompt = buildAnalysisPrompt(items, this.settings.language);
+    const rawText = await this.callAi(prompt);
+    const parsed = parseAiResults(rawText);
+    if (!parsed.length) {
+      throw new Error("AI response did not contain a JSON array.");
+    }
+
+    const byUrl = new Map(parsed.map((item) => [item.url || "", item]));
+    return baseline.map((article) => {
+      const ai = byUrl.get(article.url) || parsed.find((candidate) => candidate.title === article.title);
+      if (!ai) return article;
+
+      return {
+        ...article,
+        title: cleanText(ai.title || article.title),
+        summary: cleanText(ai.summary || article.summary),
+        category: cleanText(ai.category || article.category),
+        importance: clampImportance(ai.importance),
+        sentiment: normalizeSentiment(ai.sentiment),
+        tags: Array.isArray(ai.tags) ? ai.tags.map(cleanText).filter(Boolean).slice(0, 8) : article.tags,
+      };
+    });
+  }
+
+  private async callAi(prompt: string): Promise<string> {
+    const provider = this.settings.aiProvider;
+    const model = this.settings.aiModel || PROVIDER_DEFAULT_MODELS[provider];
+
+    if (provider === "openai") {
+      return this.callOpenAI(model, prompt);
+    }
+    if (provider === "anthropic") {
+      return this.callAnthropic(model, prompt);
+    }
+    if (provider === "gemini") {
+      return this.callGemini(model, prompt);
+    }
+    throw new Error(`Unsupported AI provider: ${provider}`);
+  }
+
+  private async callOpenAI(model: string, prompt: string): Promise<string> {
+    const response = await requestUrl({
+      url: "https://api.openai.com/v1/responses",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.settings.apiKey.trim()}`,
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        max_output_tokens: this.settings.maxOutputTokens,
+      }),
+      throw: false,
+    });
+
+    assertOk(response.status, "OpenAI");
+    const json = response.json as Record<string, unknown>;
+    return extractOpenAIText(json);
+  }
+
+  private async callAnthropic(model: string, prompt: string): Promise<string> {
+    const response = await requestUrl({
+      url: "https://api.anthropic.com/v1/messages",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.settings.apiKey.trim(),
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: this.settings.maxOutputTokens,
+        messages: [{ role: "user", content: prompt }],
+      }),
+      throw: false,
+    });
+
+    assertOk(response.status, "Anthropic");
+    const json = response.json as Record<string, unknown>;
+    return extractAnthropicText(json);
+  }
+
+  private async callGemini(model: string, prompt: string): Promise<string> {
+    const safeModel = model.startsWith("models/") ? model : `models/${model}`;
+    const response = await requestUrl({
+      url: `https://generativelanguage.googleapis.com/v1beta/${safeModel}:generateContent?key=${encodeURIComponent(this.settings.apiKey.trim())}`,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          maxOutputTokens: this.settings.maxOutputTokens,
+        },
+      }),
+      throw: false,
+    });
+
+    assertOk(response.status, "Gemini");
+    const json = response.json as Record<string, unknown>;
+    return extractGeminiText(json);
+  }
+
+  private async writeArticleNote(article: AnalyzedArticle) {
+    const date = getDatePart(article.publishedAt) || today();
+    const fileName = `${date} ${sanitizeFileName(article.title).slice(0, 90)}.md`;
     const path = normalizePath(`${this.settings.outputFolder}/Articles/${fileName}`);
-    const summary = article.summary_ko || article.summary_text || "";
-
-    await this.ensureFolder(`${this.settings.outputFolder}/Articles`);
-
     const body = [
       "---",
       `type: "trading-news-article"`,
-      `project: "Trading News Radar"`,
-      `article_id: "${yamlEscape(id)}"`,
-      `category: "${yamlEscape(article.category || "")}"`,
-      `importance: ${Number.isFinite(article.importance) ? article.importance : 0}`,
-      `sentiment: "${yamlEscape(article.sentiment || "")}"`,
-      `published_at: "${yamlEscape(article.published_at || "")}"`,
-      `source_id: "${yamlEscape(article.source_id || "")}"`,
-      `url: "${yamlEscape(article.url || "")}"`,
-      `tags: ${formatTags(["trading-news", article.category, ...(article.tags || [])])}`,
+      `project: "Tradir Obsdian"`,
+      `source: "${yamlEscape(article.source)}"`,
+      `category: "${yamlEscape(article.category)}"`,
+      `importance: ${article.importance}`,
+      `sentiment: "${article.sentiment}"`,
+      `published_at: "${yamlEscape(article.publishedAt)}"`,
+      `url: "${yamlEscape(article.url)}"`,
+      `tags: ${formatTags(["trading-news", article.category, ...article.tags])}`,
       "---",
       "",
-      `# ${title}`,
+      `# ${article.title}`,
       "",
       "## Summary",
       "",
-      summary || "_No summary provided._",
+      article.summary || "_No summary provided._",
       "",
       "## Metadata",
       "",
-      `- Source: ${article.source || article.source_id || "Unknown"}`,
-      `- Category: ${article.category || "Unknown"}`,
-      `- Importance: ${article.importance ?? "Unknown"}`,
-      `- Sentiment: ${article.sentiment || "Unknown"}`,
-      `- Published: ${article.published_at || "Unknown"}`,
-      article.url ? `- Original: ${article.url}` : "- Original: Unknown",
+      `- Source: ${article.source}`,
+      `- Category: ${article.category}`,
+      `- Importance: ${article.importance}`,
+      `- Sentiment: ${article.sentiment}`,
+      `- Published: ${article.publishedAt || "Unknown"}`,
+      `- Original: ${article.url}`,
+      "",
+      "## Raw Excerpt",
+      "",
+      article.description || "_No RSS excerpt provided._",
       "",
     ].join("\n");
 
     await this.writeOrReplace(path, body);
   }
 
-  private async writeBriefingNote(briefing: TradingBriefing) {
-    const date = briefing.date || getDatePart(briefing.created_at) || today();
+  private async writeBriefingNote(articles: AnalyzedArticle[]) {
+    const date = today();
     const path = normalizePath(`${this.settings.outputFolder}/Briefings/${date} Trading News Briefing.md`);
-    await this.ensureFolder(`${this.settings.outputFolder}/Briefings`);
-
-    const topArticles = Array.isArray(briefing.top_articles) ? briefing.top_articles : [];
+    const sorted = [...articles].sort((a, b) => b.importance - a.importance);
     const lines = [
       "---",
       `type: "trading-news-briefing"`,
-      `project: "Trading News Radar"`,
-      `briefing_id: "${yamlEscape(briefing.id || "")}"`,
-      `date: "${yamlEscape(date)}"`,
-      `created_at: "${yamlEscape(briefing.created_at || "")}"`,
+      `project: "Tradir Obsdian"`,
+      `date: "${date}"`,
+      `ai_provider: "${this.settings.aiProvider}"`,
+      `ai_model: "${yamlEscape(this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider])}"`,
       `tags: ${formatTags(["trading-news", "briefing"])}`,
       "---",
       "",
       `# Trading News Briefing - ${date}`,
       "",
+      `Generated from ${articles.length} RSS item${articles.length === 1 ? "" : "s"}.`,
+      "",
+      "## Top Stories",
+      "",
     ];
 
-    if (briefing.summary) {
-      lines.push("> " + briefing.summary, "");
-    }
-
-    lines.push("## Top Articles", "");
-    if (!topArticles.length) {
-      lines.push("_No top articles provided._", "");
-    } else {
-      topArticles.forEach((item, index) => {
-        const headline = item.headline || item.title || "Untitled";
-        const detail = item.why_important || item.summary || "";
-        lines.push(`### ${index + 1}. ${headline}`, "");
-        if (detail) lines.push(detail, "");
-        if (item.url) lines.push(`- Original: ${item.url}`);
-        if (item.article_id) lines.push(`- Article ID: ${item.article_id}`);
-        lines.push("");
-      });
-    }
+    sorted.forEach((article, index) => {
+      lines.push(
+        `### ${index + 1}. ${article.title}`,
+        "",
+        `- Source: ${article.source}`,
+        `- Category: ${article.category}`,
+        `- Importance: ${article.importance}`,
+        `- Sentiment: ${article.sentiment}`,
+        `- Original: ${article.url}`,
+        "",
+        article.summary || article.description || "_No summary provided._",
+        "",
+      );
+    });
 
     await this.writeOrReplace(path, lines.join("\n"));
   }
@@ -293,13 +437,15 @@ export default class TradirObsdianPlugin extends Plugin {
     const files = this.app.vault
       .getMarkdownFiles()
       .filter((file) => file.path.startsWith(`${normalizePath(this.settings.outputFolder)}/`))
+      .filter((file) => file.basename !== "INDEX")
       .sort((a, b) => b.path.localeCompare(a.path));
 
     const lines = [
-      "# Trading News Radar",
+      "# Tradir Obsdian",
       "",
       `- Updated: ${new Date().toISOString()}`,
       `- Notes: ${files.length}`,
+      `- AI provider: ${this.settings.aiProvider}`,
       "",
       "## Latest Notes",
       "",
@@ -335,6 +481,12 @@ export default class TradirObsdianPlugin extends Plugin {
     await this.app.vault.create(path, body);
   }
 
+  private setStatus(text: string) {
+    if (!this.statusEl) return;
+    this.statusEl.setText(`Tradir: ${text}`);
+    this.statusEl.addClass("tradir-obsdian-status");
+  }
+
   private handleError(prefix: string, error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     new Notice(`${prefix}: ${message}`);
@@ -357,41 +509,14 @@ class TradirSettingTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "Tradir Obsdian" });
     const intro = containerEl.createDiv({ cls: "tradir-obsdian-card" });
-    intro.createEl("h3", { text: "Trading News Radar" });
+    intro.createEl("h3", { text: "Obsidian-native trading news radar" });
     intro.createEl("p", {
-      text: "Configure a read-only API endpoint, then import articles and briefings into Markdown notes.",
+      text: "Collect RSS feeds, optionally analyze them with your own AI key, and write Markdown notes into your vault.",
     });
 
     new Setting(containerEl)
-      .setName("Trading News Radar endpoint")
-      .setDesc("Base URL for the Trading News Radar API.")
-      .addText((text) =>
-        text
-          .setPlaceholder("https://tnews.xsw.kr")
-          .setValue(this.plugin.settings.endpoint)
-          .onChange(async (value) => {
-            this.plugin.settings.endpoint = value.trim() || DEFAULT_SETTINGS.endpoint;
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(containerEl)
-      .setName("API token")
-      .setDesc("Optional bearer token. Leave blank for public read-only APIs.")
-      .addText((text) => {
-        text.inputEl.type = "password";
-        text
-          .setPlaceholder("optional")
-          .setValue(this.plugin.settings.apiToken)
-          .onChange(async (value) => {
-            this.plugin.settings.apiToken = value;
-            await this.plugin.saveSettings();
-          });
-      });
-
-    new Setting(containerEl)
       .setName("Output folder")
-      .setDesc("Vault folder where imported notes are written.")
+      .setDesc("Vault folder where article notes, briefings, and INDEX.md are written.")
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_SETTINGS.outputFolder)
@@ -403,8 +528,23 @@ class TradirSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("RSS sources")
+      .setDesc("One source per line. Use Name|URL or a plain RSS URL.")
+      .addTextArea((text) => {
+        text.inputEl.rows = 8;
+        text.inputEl.addClass("tradir-obsdian-sources");
+        text
+          .setPlaceholder(DEFAULT_SOURCES)
+          .setValue(this.plugin.settings.sourceText)
+          .onChange(async (value) => {
+            this.plugin.settings.sourceText = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
       .setName("Default article limit")
-      .setDesc("Number of articles imported by the default sync command.")
+      .setDesc("Maximum RSS items processed per command run.")
       .addText((text) =>
         text
           .setPlaceholder(String(DEFAULT_SETTINGS.defaultLimit))
@@ -417,32 +557,323 @@ class TradirSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Connection")
-      .setDesc("Check whether the configured endpoint exposes /api/status.")
+      .setName("AI provider")
+      .setDesc("None uses zero AI tokens. Other providers use the API key stored in this vault's plugin data.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("none", "None - RSS only")
+          .addOption("openai", "OpenAI")
+          .addOption("anthropic", "Anthropic Claude")
+          .addOption("gemini", "Google Gemini")
+          .setValue(this.plugin.settings.aiProvider)
+          .onChange(async (value: AiProvider) => {
+            this.plugin.settings.aiProvider = value;
+            this.plugin.settings.aiModel = PROVIDER_DEFAULT_MODELS[value];
+            await this.plugin.saveSettings();
+            this.display();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("AI model")
+      .setDesc("Provider model ID. You can replace the preset with any model your account supports.")
+      .addText((text) =>
+        text
+          .setPlaceholder(PROVIDER_DEFAULT_MODELS[this.plugin.settings.aiProvider])
+          .setValue(this.plugin.settings.aiModel)
+          .onChange(async (value) => {
+            this.plugin.settings.aiModel = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("API key")
+      .setDesc("Your own key. Leave blank when AI provider is None.")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text
+          .setPlaceholder("Stored in this vault's plugin data")
+          .setValue(this.plugin.settings.apiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.apiKey = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Briefing language")
+      .setDesc("Language used when AI analysis is enabled.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.language)
+          .setValue(this.plugin.settings.language)
+          .onChange(async (value) => {
+            this.plugin.settings.language = value.trim() || DEFAULT_SETTINGS.language;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Max output tokens")
+      .setDesc("Upper bound for one AI batch analysis response.")
+      .addText((text) =>
+        text
+          .setPlaceholder(String(DEFAULT_SETTINGS.maxOutputTokens))
+          .setValue(String(this.plugin.settings.maxOutputTokens))
+          .onChange(async (value) => {
+            const parsed = Number.parseInt(value, 10);
+            this.plugin.settings.maxOutputTokens = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SETTINGS.maxOutputTokens;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("RSS check")
+      .setDesc("Fetch the first source without using AI.")
       .addButton((button) =>
         button
-          .setButtonText("Test")
-          .onClick(() => void this.plugin.testConnection()),
+          .setButtonText("Test RSS")
+          .onClick(() => void this.plugin.testSources()),
       );
 
     new Setting(containerEl)
       .setName("Import")
-      .setDesc("Run the default article import now.")
+      .setDesc("Collect RSS items and write article notes.")
       .addButton((button) =>
         button
-          .setButtonText("Sync latest")
+          .setButtonText("Collect latest")
           .setCta()
-          .onClick(() => void this.plugin.syncLatestArticles()),
+          .onClick(() => void this.plugin.collectLatestNews()),
+      );
+
+    new Setting(containerEl)
+      .setName("Briefing")
+      .setDesc("Collect RSS items and write a daily briefing note.")
+      .addButton((button) =>
+        button
+          .setButtonText("Create briefing")
+          .onClick(() => void this.plugin.createDailyBriefing()),
       );
   }
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+function parseSources(text: string): FeedSource[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .map((line) => {
+      const [name, ...urlParts] = line.split("|");
+      const url = urlParts.length ? urlParts.join("|").trim() : name.trim();
+      return {
+        name: urlParts.length ? name.trim() || url : inferSourceName(url),
+        url,
+      };
+    })
+    .filter((source) => /^https?:\/\//i.test(source.url));
+}
+
+function parseFeed(xml: string, source: FeedSource): FeedItem[] {
+  const doc = new DOMParser().parseFromString(xml, "text/xml");
+  const rssItems = Array.from(doc.querySelectorAll("item"));
+  const atomEntries = Array.from(doc.querySelectorAll("entry"));
+  const nodes = rssItems.length ? rssItems : atomEntries;
+
+  return nodes
+    .map((node) => {
+      const title = cleanText(textOf(node, "title"));
+      const link = cleanText(textOf(node, "link")) || cleanText(attrOf(node, "link", "href"));
+      const description = cleanText(
+        textOf(node, "description") ||
+        textOf(node, "summary") ||
+        textOf(node, "content") ||
+        textOf(node, "content\\:encoded"),
+      );
+      const publishedAt = cleanText(
+        textOf(node, "pubDate") ||
+        textOf(node, "published") ||
+        textOf(node, "updated") ||
+        new Date().toISOString(),
+      );
+
+      return {
+        id: hashString(`${source.name}:${link || title}`),
+        source: source.name,
+        title: title || "Untitled",
+        url: link,
+        description,
+        publishedAt,
+      };
+    })
+    .filter((item) => item.url || item.title !== "Untitled");
+}
+
+function textOf(node: Element, selector: string): string {
+  return node.querySelector(selector)?.textContent || "";
+}
+
+function attrOf(node: Element, selector: string, attr: string): string {
+  return node.querySelector(selector)?.getAttribute(attr) || "";
+}
+
+function fallbackAnalysis(item: FeedItem): AnalyzedArticle {
+  return {
+    ...item,
+    summary: item.description || "RSS item collected without AI analysis.",
+    category: inferCategory(`${item.title} ${item.description}`),
+    importance: 3,
+    sentiment: "neutral",
+    tags: buildTags(`${item.title} ${item.description}`),
+  };
+}
+
+function buildAnalysisPrompt(items: FeedItem[], language: string): string {
+  const compact = items.map((item) => ({
+    url: item.url,
+    source: item.source,
+    title: item.title,
+    published_at: item.publishedAt,
+    excerpt: item.description.slice(0, 800),
+  }));
+
+  return [
+    `Analyze these trading and financial news RSS items. Respond in ${language}.`,
+    "Return only valid JSON. The top-level value must be an array.",
+    "Each array item must include: url, title, summary, category, importance, sentiment, tags.",
+    "category should be one of: crypto, us_stock, kr_stock, macro, rates, fx, commodity, regulation, trading_other.",
+    "importance must be an integer from 1 to 5. sentiment must be positive, neutral, or negative.",
+    "",
+    JSON.stringify(compact),
+  ].join("\n");
+}
+
+function parseAiResults(rawText: string): AiArticleResult[] {
+  const trimmed = rawText.trim();
+  const direct = tryParseJson(trimmed);
+  if (Array.isArray(direct)) return direct as AiArticleResult[];
+  if (isObject(direct) && Array.isArray(direct.articles)) return direct.articles as AiArticleResult[];
+
+  const match = trimmed.match(/\[[\s\S]*\]/);
+  if (!match) return [];
+  const parsed = tryParseJson(match[0]);
+  return Array.isArray(parsed) ? parsed as AiArticleResult[] : [];
+}
+
+function tryParseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function extractOpenAIText(json: Record<string, unknown>): string {
+  if (typeof json.output_text === "string") return json.output_text;
+  const output = Array.isArray(json.output) ? json.output : [];
+  const parts: string[] = [];
+  for (const item of output) {
+    if (!isObject(item) || !Array.isArray(item.content)) continue;
+    for (const content of item.content) {
+      if (isObject(content) && typeof content.text === "string") parts.push(content.text);
+    }
+  }
+  return parts.join("\n");
+}
+
+function extractAnthropicText(json: Record<string, unknown>): string {
+  const content = Array.isArray(json.content) ? json.content : [];
+  return content
+    .map((item) => isObject(item) && typeof item.text === "string" ? item.text : "")
+    .filter(Boolean)
+    .join("\n");
+}
+
+function extractGeminiText(json: Record<string, unknown>): string {
+  const candidates = Array.isArray(json.candidates) ? json.candidates : [];
+  const first = candidates[0];
+  if (!isObject(first) || !isObject(first.content) || !Array.isArray(first.content.parts)) return "";
+  return first.content.parts
+    .map((part) => isObject(part) && typeof part.text === "string" ? part.text : "")
+    .filter(Boolean)
+    .join("\n");
+}
+
+function assertOk(status: number, provider: string) {
+  if (status < 200 || status >= 300) {
+    throw new Error(`${provider} API returned HTTP ${status}`);
+  }
+}
+
+function dedupeByUrl(items: FeedItem[]): FeedItem[] {
+  const seen = new Set<string>();
+  const out: FeedItem[] = [];
+  for (const item of items) {
+    const key = item.url || item.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+function inferSourceName(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "RSS Source";
+  }
+}
+
+function cleanText(input: unknown): string {
+  if (typeof input !== "string") return "";
+  const div = document.createElement("div");
+  div.innerHTML = input;
+  return (div.textContent || div.innerText || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferCategory(text: string): string {
+  const lower = text.toLowerCase();
+  if (/(bitcoin|crypto|coin|ethereum|btc|eth|defi|blockchain)/.test(lower)) return "crypto";
+  if (/(fed|inflation|gdp|jobs|recession|macro|economy)/.test(lower)) return "macro";
+  if (/(rate|yield|bond|treasury|fomc)/.test(lower)) return "rates";
+  if (/(oil|gold|commodity|wti|brent|copper)/.test(lower)) return "commodity";
+  if (/(dollar|yen|euro|fx|currency|forex)/.test(lower)) return "fx";
+  if (/(sec|regulation|policy|law|ban|approval)/.test(lower)) return "regulation";
+  return "trading_other";
+}
+
+function buildTags(text: string): string[] {
+  return Array.from(
+    new Set(
+      cleanText(text)
+        .split(/[^\p{L}\p{N}.$-]+/u)
+        .filter((word) => word.length >= 4)
+        .slice(0, 12)
+        .map((word) => word.replace(/^#+/, "")),
+    ),
+  ).slice(0, 6);
+}
+
+function normalizeSentiment(value: unknown): Sentiment {
+  return value === "positive" || value === "negative" || value === "neutral" ? value : "neutral";
+}
+
+function clampImportance(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value || ""), 10);
+  if (!Number.isFinite(parsed)) return 3;
+  return Math.min(5, Math.max(1, Math.round(parsed)));
+}
+
+function timestamp(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function sanitizeFileName(input: string): string {
-  return input
+  return cleanText(input)
     .replace(/[<>:"/\\|?*\n\r\t]/g, " ")
     .replace(/\s+/g, " ")
     .trim() || "Untitled";
@@ -465,8 +896,10 @@ function formatTags(tags: Array<string | undefined>): string {
 
 function getDatePart(value?: string): string | null {
   if (!value) return null;
-  const match = value.match(/^\d{4}-\d{2}-\d{2}/);
-  return match ? match[0] : null;
+  const direct = value.match(/^\d{4}-\d{2}-\d{2}/);
+  if (direct) return direct[0];
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : null;
 }
 
 function today(): string {
@@ -479,5 +912,9 @@ function hashString(input: string): string {
     hash = (hash << 5) - hash + input.charCodeAt(i);
     hash |= 0;
   }
-  return `art_${Math.abs(hash).toString(16)}`;
+  return `item_${Math.abs(hash).toString(16)}`;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

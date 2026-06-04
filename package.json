@@ -1,7 +1,7 @@
 {
   "name": "tradir-obsdian",
-  "version": "0.1.0",
-  "description": "Obsidian plugin for importing Trading News Radar content into notes.",
+  "version": "0.2.0",
+  "description": "Obsidian-native trading news radar with RSS collection, BYOK AI analysis, and Markdown briefings.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs --watch",
