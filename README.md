@@ -64,6 +64,8 @@ Briefing notes are formatted as clean Obsidian-native Markdown reports with a su
 
 The ribbon icon opens a command panel for common work: news import, briefing generation, RSS check, AI check, and settings. After briefing generation, the plugin also opens a readable HTML report modal while still saving the Markdown report to the vault.
 
+The HTML modal uses an original-style news radar layout with a left action rail, top metrics, dashboard/feed tabs, category filters, translated Korean titles, original titles, summaries, sentiment, importance stars, tags, and source/date metadata.
+
 When AI is enabled, the plugin calls the selected provider directly from Obsidian using the user's own key. API keys are stored in this vault's plugin data, so users should avoid syncing plugin data to places they do not trust.
 
 This plugin does not ship private keys, hard-coded local paths, or a default public endpoint.
