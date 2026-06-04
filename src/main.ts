@@ -98,7 +98,7 @@ const DEFAULT_SETTINGS: TradirSettings = {
   language: "Korean",
 };
 
-const AI_ANALYSIS_BATCH_SIZE = 12;
+const AI_ANALYSIS_BATCH_SIZE = 6;
 
 const PROVIDER_DEFAULT_MODELS: Record<AiProvider, string> = {
   none: "",
@@ -546,13 +546,7 @@ export default class TradirObsdianPlugin extends Plugin {
     try {
       const batches = chunk(items, AI_ANALYSIS_BATCH_SIZE);
       for (const batch of batches) {
-        const prompt = buildAnalysisPrompt(batch, this.settings.language);
-        const rawText = await this.callAi(prompt, this.settings.maxOutputTokens);
-        const batchParsed = parseAiResults(rawText);
-        if (!batchParsed.length) {
-          throw new Error(`AI response did not contain parsable articles JSON. ${rawText.slice(0, 180)}`);
-        }
-        parsed.push(...batchParsed);
+        parsed.push(...await this.analyzeBatchWithRetry(batch));
       }
     } catch (error) {
       if (!fallbackOnError) {
@@ -579,6 +573,24 @@ export default class TradirObsdianPlugin extends Plugin {
         tags: readAiTags(ai) || article.tags,
       };
     });
+  }
+
+  private async analyzeBatchWithRetry(batch: FeedItem[]): Promise<AiArticleResult[]> {
+    const prompt = buildAnalysisPrompt(batch, this.settings.language);
+    const rawText = await this.callAi(prompt, this.settings.maxOutputTokens);
+    const parsed = parseAiResults(rawText);
+    if (parsed.length) return parsed;
+
+    if (batch.length === 1) {
+      throw new Error(`AI response did not contain parsable articles JSON. ${rawText.slice(0, 180)}`);
+    }
+
+    console.warn("[Tradir Obsdian] AI batch JSON parse failed; retrying one item at a time", rawText.slice(0, 240));
+    const retried: AiArticleResult[] = [];
+    for (const item of batch) {
+      retried.push(...await this.analyzeBatchWithRetry([item]));
+    }
+    return retried;
   }
 
   private async callAi(prompt: string, maxOutputTokens = this.settings.maxOutputTokens): Promise<string> {
@@ -1178,7 +1190,7 @@ class TradirCommandModal extends Modal {
     const header = contentEl.createDiv({ cls: "tradir-command-header" });
     header.createDiv({ cls: "tradir-command-mark", text: "TN" });
     const title = header.createDiv();
-    title.createEl("h2", { text: "Tradir News Radar" });
+    title.createEl("h2", { text: "News Rader" });
     title.createEl("p", { text: "뉴스 수집, AI 분석 미리보기, 원클릭 브리핑 생성을 실행합니다." });
 
     const grid = contentEl.createDiv({ cls: "tradir-command-grid" });
@@ -1308,7 +1320,7 @@ class TradirBriefingModal extends Modal {
     const main = shell.createDiv({ cls: "tradir-radar-main" });
     const header = main.createDiv({ cls: "tradir-briefing-hero" });
     const eyebrow = header.createDiv({ cls: "tradir-briefing-eyebrow", text: today() });
-    eyebrow.createSpan({ text: " · AI News Radar" });
+    eyebrow.createSpan({ text: " · News Rader" });
     header.createEl("h2", { text: this.getModeTitle(searched.length) });
     header.createEl("p", { text: this.getModeDescription(sorted) });
 
@@ -1781,6 +1793,7 @@ function buildAnalysisPrompt(items: FeedItem[], language: string): string {
   return [
     `Analyze these trading and financial news RSS items. Respond in ${language}.`,
     "Return only valid JSON with this exact top-level shape: {\"articles\":[...]}",
+    `The articles array must contain exactly ${compact.length} items in the same order as the input items.`,
     "Each articles item must include: url, title, summary, category, importance, sentiment, tags.",
     `Translate title and summary into ${language}. Preserve the original source meaning and do not leave title in English unless it is a company, ticker, or product name.`,
     "category must be one exact enum string: crypto, us_stock, kr_stock, macro, rates, fx, commodity, regulation, trading_other.",
