@@ -354,6 +354,7 @@ export default class TradirObsdianPlugin extends Plugin {
     const path = normalizePath(`${this.settings.outputFolder}/Articles/${fileName}`);
     const body = [
       "---",
+      `title: "${yamlEscape(article.title)}"`,
       `type: "trading-news-article"`,
       `project: "Tradir Obsdian"`,
       `source: "${yamlEscape(article.source)}"`,
@@ -363,26 +364,33 @@ export default class TradirObsdianPlugin extends Plugin {
       `published_at: "${yamlEscape(article.publishedAt)}"`,
       `url: "${yamlEscape(article.url)}"`,
       `tags: ${formatTags(["trading-news", article.category, ...article.tags])}`,
+      `cssclasses: ["tradir-report"]`,
       "---",
       "",
-      `# ${article.title}`,
+      `# ${sentimentIcon(article.sentiment)} ${article.title}`,
       "",
-      "## Summary",
+      "> [!abstract] 핵심 요약",
+      `> ${article.summary || "요약이 없습니다."}`,
       "",
-      article.summary || "_No summary provided._",
+      "## 기사 상태",
       "",
-      "## Metadata",
+      "| 항목 | 값 |",
+      "|---|---:|",
+      `| 출처 | ${tableCell(article.source)} |`,
+      `| 분류 | ${tableCell(categoryLabel(article.category))} |`,
+      `| 중요도 | ${tableCell(importanceStars(article.importance))} |`,
+      `| 감성 | ${tableCell(sentimentLabel(article.sentiment))} |`,
+      `| 발행 | ${tableCell(article.publishedAt || "Unknown")} |`,
       "",
-      `- Source: ${article.source}`,
-      `- Category: ${article.category}`,
-      `- Importance: ${article.importance}`,
-      `- Sentiment: ${article.sentiment}`,
-      `- Published: ${article.publishedAt || "Unknown"}`,
-      `- Original: ${article.url}`,
+      "## 원문",
       "",
-      "## Raw Excerpt",
+      article.url ? `[${article.url}](${article.url})` : "_원문 링크가 없습니다._",
       "",
-      article.description || "_No RSS excerpt provided._",
+      "## RSS 발췌",
+      "",
+      article.description || "_RSS 발췌가 없습니다._",
+      "",
+      article.tags.length ? `태그: ${article.tags.map((tag) => `#${tag.replace(/\s+/g, "-")}`).join(" ")}` : "",
       "",
     ].join("\n");
 
@@ -393,38 +401,88 @@ export default class TradirObsdianPlugin extends Plugin {
     const date = today();
     const path = normalizePath(`${this.settings.outputFolder}/Briefings/${date} Trading News Briefing.md`);
     const sorted = [...articles].sort((a, b) => b.importance - a.importance);
+    const highImpact = sorted.filter((article) => article.importance >= 4);
+    const sourceCount = new Set(sorted.map((article) => article.source)).size;
+    const negativeCount = sorted.filter((article) => article.sentiment === "negative").length;
+    const positiveCount = sorted.filter((article) => article.sentiment === "positive").length;
     const lines = [
       "---",
+      `title: "Trading News Briefing - ${date}"`,
       `type: "trading-news-briefing"`,
       `project: "Tradir Obsdian"`,
       `date: "${date}"`,
       `ai_provider: "${this.settings.aiProvider}"`,
       `ai_model: "${yamlEscape(this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider])}"`,
       `tags: ${formatTags(["trading-news", "briefing"])}`,
+      `cssclasses: ["tradir-report"]`,
       "---",
       "",
-      `# Trading News Briefing - ${date}`,
+      `# 📡 Trading News Briefing`,
       "",
-      `Generated from ${articles.length} RSS item${articles.length === 1 ? "" : "s"}.`,
+      `## ${date} 시장 뉴스 레이더`,
       "",
-      "## Top Stories",
+      "> [!summary] 오늘의 흐름",
+      `> ${briefingLead(sorted)}`,
+      ">",
+      `> 수집 기사 ${articles.length}개, 출처 ${sourceCount}개, 고중요도 ${highImpact.length}개를 기준으로 정리했습니다.`,
+      "",
+      "## 📊 브리핑 지표",
+      "",
+      "| 지표 | 값 |",
+      "|---|---:|",
+      `| 수집 기사 | ${articles.length} |`,
+      `| 뉴스 출처 | ${sourceCount} |`,
+      `| 고중요도 | ${highImpact.length} |`,
+      `| 긍정 | ${positiveCount} |`,
+      `| 부정 | ${negativeCount} |`,
+      `| AI 분석 | ${this.settings.aiProvider === "none" ? "꺼짐 (토큰 0)" : `${this.settings.aiProvider} / ${this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider]}`} |`,
+      "",
+      "## 🧭 카테고리 분포",
+      "",
+      "| 카테고리 | 기사 | 평균 중요도 |",
+      "|---|---:|---:|",
+      ...categoryRows(sorted),
+      "",
+      "## ⚠️ 우선 확인 뉴스",
       "",
     ];
 
-    sorted.forEach((article, index) => {
+    sorted.slice(0, 5).forEach((article, index) => {
       lines.push(
-        `### ${index + 1}. ${article.title}`,
+        `### ${index + 1}. ${sentimentIcon(article.sentiment)} ${article.title}`,
         "",
-        `- Source: ${article.source}`,
-        `- Category: ${article.category}`,
-        `- Importance: ${article.importance}`,
-        `- Sentiment: ${article.sentiment}`,
-        `- Original: ${article.url}`,
-        "",
-        article.summary || article.description || "_No summary provided._",
+        `> [!${calloutType(article)}] ${categoryLabel(article.category)} · ${importanceStars(article.importance)} · ${sentimentLabel(article.sentiment)}`,
+        `> ${article.summary || article.description || "요약이 없습니다."}`,
+        ">",
+        `> 출처: ${article.source}  `,
+        `> 원문: ${article.url ? `[열기](${article.url})` : "없음"}`,
         "",
       );
     });
+
+    if (sorted.length > 5) {
+      lines.push("## 🗞️ 전체 뉴스 목록", "");
+      lines.push("| 중요도 | 감성 | 카테고리 | 제목 | 출처 |");
+      lines.push("|---:|---|---|---|---|");
+      sorted.forEach((article) => {
+        lines.push(
+          `| ${article.importance} | ${sentimentIcon(article.sentiment)} | ${tableCell(categoryLabel(article.category))} | ${article.url ? `[${tableCell(article.title)}](${article.url})` : tableCell(article.title)} | ${tableCell(article.source)} |`,
+        );
+      });
+      lines.push("");
+    }
+
+    lines.push(
+      "## 설정",
+      "",
+      "| 항목 | 값 |",
+      "|---|---|",
+      `| RSS 처리 한도 | ${this.settings.defaultLimit} |`,
+      `| AI Provider | ${this.settings.aiProvider} |`,
+      `| Model | ${this.settings.aiModel || PROVIDER_DEFAULT_MODELS[this.settings.aiProvider] || "N/A"} |`,
+      `| Output tokens | ${this.settings.maxOutputTokens} |`,
+      "",
+    );
 
     await this.writeOrReplace(path, lines.join("\n"));
   }
@@ -797,6 +855,72 @@ function extractGeminiText(json: Record<string, unknown>): string {
     .map((part) => isObject(part) && typeof part.text === "string" ? part.text : "")
     .filter(Boolean)
     .join("\n");
+}
+
+function briefingLead(articles: AnalyzedArticle[]): string {
+  if (!articles.length) return "수집된 뉴스가 없습니다.";
+  const top = articles[0];
+  const negative = articles.filter((article) => article.sentiment === "negative").length;
+  const positive = articles.filter((article) => article.sentiment === "positive").length;
+  const tone = negative > positive ? "리스크 점검이 우선입니다" : positive > negative ? "긍정 재료가 상대적으로 우세합니다" : "방향성은 중립에 가깝습니다";
+  return `${categoryLabel(top.category)}에서 가장 높은 중요도 뉴스가 포착됐고, 전체 감성 기준으로는 ${tone}.`;
+}
+
+function categoryRows(articles: AnalyzedArticle[]): string[] {
+  const groups = new Map<string, AnalyzedArticle[]>();
+  for (const article of articles) {
+    const key = article.category || "trading_other";
+    groups.set(key, [...(groups.get(key) || []), article]);
+  }
+
+  return Array.from(groups.entries())
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([category, group]) => {
+      const avg = group.reduce((sum, article) => sum + article.importance, 0) / group.length;
+      return `| ${tableCell(categoryLabel(category))} | ${group.length} | ${avg.toFixed(1)} |`;
+    });
+}
+
+function categoryLabel(category: string): string {
+  const labels: Record<string, string> = {
+    crypto: "암호화폐/코인",
+    us_stock: "미국 주식",
+    kr_stock: "한국 주식",
+    macro: "매크로 경제",
+    rates: "금리/채권",
+    fx: "환율/외환",
+    commodity: "원자재",
+    regulation: "규제/정책",
+    trading_other: "기타",
+  };
+  return labels[category] || category || "기타";
+}
+
+function sentimentIcon(sentiment: Sentiment): string {
+  if (sentiment === "positive") return "🟢";
+  if (sentiment === "negative") return "🔴";
+  return "🟡";
+}
+
+function sentimentLabel(sentiment: Sentiment): string {
+  if (sentiment === "positive") return "🟢 긍정";
+  if (sentiment === "negative") return "🔴 부정";
+  return "🟡 중립";
+}
+
+function importanceStars(importance: number): string {
+  const count = Math.min(5, Math.max(1, Math.round(importance)));
+  return "★".repeat(count) + "☆".repeat(5 - count);
+}
+
+function calloutType(article: AnalyzedArticle): string {
+  if (article.importance >= 5 || article.sentiment === "negative") return "warning";
+  if (article.sentiment === "positive") return "success";
+  return "info";
+}
+
+function tableCell(value: string): string {
+  return cleanText(value).replace(/\|/g, "\\|") || "-";
 }
 
 function assertOk(status: number, provider: string) {

@@ -45,6 +45,8 @@ The build outputs `main.js` in the repository root for BRAT/release packaging.
 
 Default mode is RSS-only and uses zero AI tokens.
 
+Briefing notes are formatted as readable Obsidian reports with summary callouts, status tables, category distribution, priority news sections, and an article list. The plugin adds a scoped `tradir-report` CSS class to generated notes.
+
 When AI is enabled, the plugin calls the selected provider directly from Obsidian using the user's own key. API keys are stored in this vault's plugin data, so users should avoid syncing plugin data to places they do not trust.
 
 This plugin does not ship private keys, hard-coded local paths, or a default public endpoint.

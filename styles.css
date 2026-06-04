@@ -19,3 +19,32 @@
   margin: 0;
   color: var(--text-muted);
 }
+
+.markdown-preview-view.tradir-report h1 {
+  border-bottom: 2px solid var(--color-accent);
+  padding-bottom: 0.35em;
+}
+
+.markdown-preview-view.tradir-report h2 {
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 0.25em;
+  margin-top: 1.8em;
+}
+
+.markdown-preview-view.tradir-report table {
+  width: 100%;
+}
+
+.markdown-preview-view.tradir-report th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.markdown-preview-view.tradir-report td,
+.markdown-preview-view.tradir-report th {
+  padding: 8px 10px;
+}
+
+.markdown-preview-view.tradir-report .callout {
+  border-radius: 8px;
+}
