@@ -565,11 +565,11 @@ export default class TradirObsdianPlugin extends Plugin {
 
       return {
         ...article,
-        title: readAiString(ai, ["title", "translated_title", "translatedTitle", "korean_title", "koreanTitle", "headline"]) || article.title,
-        summary: readAiString(ai, ["summary", "translated_summary", "translatedSummary", "korean_summary", "koreanSummary", "description"]) || article.summary,
-        category: normalizeCategory(readAiString(ai, ["category", "sector", "topic"]) || article.category),
-        importance: clampImportance(readAiValue(ai, ["importance", "importance_score", "importanceScore", "score", "rating"])),
-        sentiment: normalizeSentiment(readAiValue(ai, ["sentiment", "sentiment_label", "sentimentLabel", "tone", "market_tone", "marketTone"])),
+        title: readAiString(ai, ["title", "translated_title", "translatedTitle", "korean_title", "koreanTitle", "headline", "제목", "번역제목", "한국어제목", "헤드라인"]) || article.title,
+        summary: readAiString(ai, ["summary", "translated_summary", "translatedSummary", "korean_summary", "koreanSummary", "description", "요약", "번역요약", "한국어요약", "설명"]) || article.summary,
+        category: normalizeCategory(readAiString(ai, ["category", "sector", "topic", "카테고리", "분류", "주제", "섹터"]) || article.category),
+        importance: clampImportance(readAiValue(ai, ["importance", "importance_score", "importanceScore", "score", "rating", "중요도", "중요도점수", "점수", "등급"])),
+        sentiment: normalizeSentiment(readAiValue(ai, ["sentiment", "sentiment_label", "sentimentLabel", "tone", "market_tone", "marketTone", "감성", "감정", "시장감성", "시장톤", "톤"])),
         tags: readAiTags(ai) || article.tags,
       };
     });
@@ -1807,12 +1807,14 @@ function parseAiResults(rawText: string): AiArticleResult[] {
   const trimmed = rawText.trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
   const direct = tryParseJson(trimmed);
   if (Array.isArray(direct)) return direct as AiArticleResult[];
-  if (isObject(direct) && Array.isArray(direct.articles)) return direct.articles as AiArticleResult[];
+  const directArray = extractAiArray(direct);
+  if (directArray) return directArray;
 
   const objectMatch = trimmed.match(/\{[\s\S]*\}/);
   if (objectMatch) {
     const objectParsed = tryParseJson(objectMatch[0]);
-    if (isObject(objectParsed) && Array.isArray(objectParsed.articles)) return objectParsed.articles as AiArticleResult[];
+    const objectArray = extractAiArray(objectParsed);
+    if (objectArray) return objectArray;
   }
 
   const match = trimmed.match(/\[[\s\S]*\]/);
@@ -1821,9 +1823,19 @@ function parseAiResults(rawText: string): AiArticleResult[] {
   return Array.isArray(parsed) ? parsed as AiArticleResult[] : [];
 }
 
+function extractAiArray(value: unknown): AiArticleResult[] | null {
+  if (!isObject(value)) return null;
+  const keys = ["articles", "items", "results", "news", "data", "기사", "뉴스", "결과"];
+  for (const key of keys) {
+    const candidate = value[key];
+    if (Array.isArray(candidate)) return candidate as AiArticleResult[];
+  }
+  return null;
+}
+
 function readAiValue(item: AiArticleResult, keys: string[]): unknown {
   for (const key of keys) {
-    const value = item[key];
+    const value = unwrapAiScalar(item[key]);
     if (value !== undefined && value !== null && value !== "") return value;
   }
   return undefined;
@@ -1831,11 +1843,12 @@ function readAiValue(item: AiArticleResult, keys: string[]): unknown {
 
 function readAiString(item: AiArticleResult, keys: string[]): string {
   const value = readAiValue(item, keys);
-  return cleanText(typeof value === "string" ? value : String(value || ""));
+  if (value === undefined || value === null || Array.isArray(value) || isObject(value)) return "";
+  return cleanText(String(value || ""));
 }
 
 function readAiTags(item: AiArticleResult): string[] | null {
-  const value = readAiValue(item, ["tags", "keywords", "tag"]);
+  const value = readAiValue(item, ["tags", "keywords", "tag", "태그", "키워드"]);
   if (Array.isArray(value)) {
     const tags = value.map(cleanText).filter(Boolean).slice(0, 8);
     return tags.length ? tags : null;
@@ -1845,6 +1858,40 @@ function readAiTags(item: AiArticleResult): string[] | null {
     return tags.length ? tags : null;
   }
   return null;
+}
+
+function unwrapAiScalar(value: unknown): unknown {
+  if (Array.isArray(value)) return value;
+  if (!isObject(value)) return value;
+  const keys = [
+    "value",
+    "label",
+    "name",
+    "text",
+    "score",
+    "sentiment",
+    "importance",
+    "category",
+    "title",
+    "summary",
+    "값",
+    "라벨",
+    "이름",
+    "텍스트",
+    "점수",
+    "감성",
+    "감정",
+    "중요도",
+    "카테고리",
+    "분류",
+    "제목",
+    "요약",
+  ];
+  for (const key of keys) {
+    const nested = value[key];
+    if (nested !== undefined && nested !== null && nested !== "") return unwrapAiScalar(nested);
+  }
+  return undefined;
 }
 
 function tryParseJson(text: string): unknown {
@@ -2227,6 +2274,7 @@ function buildTags(text: string): string[] {
 }
 
 function normalizeCategory(value: unknown): string {
+  value = unwrapAiScalar(value);
   const normalized = cleanText(String(value || "")).toLowerCase().replace(/\s+/g, "_").replace(/[-/]+/g, "_");
   const categories: Record<string, string> = {
     crypto: "crypto",
@@ -2273,14 +2321,27 @@ function normalizeCategory(value: unknown): string {
 }
 
 function normalizeSentiment(value: unknown): Sentiment {
+  value = unwrapAiScalar(value);
+  if (typeof value === "number") {
+    if (value > 0.05) return "positive";
+    if (value < -0.05) return "negative";
+    return "neutral";
+  }
   const normalized = cleanText(String(value || "")).toLowerCase();
-  if (["positive", "bullish", "긍정", "강세", "호재", "상승"].some((token) => normalized.includes(token))) return "positive";
-  if (["negative", "bearish", "부정", "약세", "악재", "하락"].some((token) => normalized.includes(token))) return "negative";
+  const numeric = Number.parseFloat(normalized);
+  if (Number.isFinite(numeric)) {
+    if (numeric > 0.05) return "positive";
+    if (numeric < -0.05) return "negative";
+    return "neutral";
+  }
+  if (["positive", "bullish", "optimistic", "favorable", "upbeat", "risk-on", "긍정", "긍정적", "강세", "호재", "상승", "상승세", "상방", "낙관", "개선"].some((token) => normalized.includes(token))) return "positive";
+  if (["negative", "bearish", "pessimistic", "unfavorable", "risk-off", "부정", "부정적", "약세", "악재", "하락", "하락세", "하방", "비관", "위험"].some((token) => normalized.includes(token))) return "negative";
   if (["neutral", "mixed", "중립", "혼조", "보합"].some((token) => normalized.includes(token))) return "neutral";
   return "neutral";
 }
 
 function clampImportance(value: unknown): number {
+  value = unwrapAiScalar(value);
   const normalized = cleanText(String(value || "")).toLowerCase();
   if (/(very high|critical|highest|매우 높|최상|긴급)/.test(normalized)) return 5;
   if (/(high|important|높|중요)/.test(normalized)) return 4;
