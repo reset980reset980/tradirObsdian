@@ -1,6 +1,6 @@
 {
   "name": "tradir-obsdian",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "description": "Obsidian-native trading news radar with RSS collection, BYOK AI analysis, and Markdown briefings.",
   "main": "main.js",
   "scripts": {

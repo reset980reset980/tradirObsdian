@@ -118,18 +118,20 @@ const EXPANDED_DEFAULT_SOURCES = [
   "FRED Blog|https://fredblog.stlouisfed.org/feed/",
 ].join("\n");
 
+const KOREAN_DEFAULT_SOURCES = [
+  "Yonhap Economy|https://www.yna.co.kr/rss/economy.xml",
+  "Donga Economy|https://rss.donga.com/economy.xml",
+  "Hankyung Economy|https://www.hankyung.com/feed/economy",
+  "Hankyung Finance|https://www.hankyung.com/feed/finance",
+  "Maeil Business Economy|https://www.mk.co.kr/rss/30100041/",
+  "ChosunBiz|https://biz.chosun.com/arc/outboundfeeds/rss/?outputType=xml",
+  "Newsis Economy|https://www.newsis.com/RSS/economy.xml",
+  "SBS Economy|https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=01&plink=RSSREADER",
+].join("\n");
+
 const DEFAULT_SOURCES = [
   EXPANDED_DEFAULT_SOURCES,
-  [
-    "Yonhap Economy|https://www.yna.co.kr/rss/economy.xml",
-    "Donga Economy|https://rss.donga.com/economy.xml",
-    "Hankyung Economy|https://www.hankyung.com/feed/economy",
-    "Hankyung Finance|https://www.hankyung.com/feed/finance",
-    "Maeil Business Economy|https://www.mk.co.kr/rss/30100041/",
-    "ChosunBiz|https://biz.chosun.com/arc/outboundfeeds/rss/?outputType=xml",
-    "Newsis Economy|https://www.newsis.com/RSS/economy.xml",
-    "SBS Economy|https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=01&plink=RSSREADER",
-  ].join("\n"),
+  KOREAN_DEFAULT_SOURCES,
 ].join("\n");
 
 const DEFAULT_SETTINGS: TradirSettings = {
@@ -306,6 +308,12 @@ export default class TradirObsdianPlugin extends Plugin {
     ) {
       this.settings.sourceText = DEFAULT_SOURCES;
       changed = true;
+    } else {
+      const sourceTextWithKoreanFeeds = appendMissingSources(this.settings.sourceText, KOREAN_DEFAULT_SOURCES);
+      if (normalizeSourceText(sourceTextWithKoreanFeeds) !== normalizeSourceText(this.settings.sourceText)) {
+        this.settings.sourceText = sourceTextWithKoreanFeeds;
+        changed = true;
+      }
     }
     if (this.settings.defaultLimit === 80) {
       this.settings.defaultLimit = DEFAULT_SETTINGS.defaultLimit;
@@ -1731,6 +1739,22 @@ function parseSources(text: string): FeedSource[] {
 
 function normalizeSourceText(text: string): string {
   return parseSources(text).map((source) => `${source.name}|${source.url}`).join("\n");
+}
+
+function appendMissingSources(sourceText: string, extraSourceText: string): string {
+  const sources = parseSources(sourceText);
+  const seenUrls = new Set(sources.map((source) => normalizeSourceUrl(source.url)));
+  for (const source of parseSources(extraSourceText)) {
+    const urlKey = normalizeSourceUrl(source.url);
+    if (seenUrls.has(urlKey)) continue;
+    sources.push(source);
+    seenUrls.add(urlKey);
+  }
+  return sources.map((source) => `${source.name}|${source.url}`).join("\n");
+}
+
+function normalizeSourceUrl(url: string): string {
+  return url.trim().replace(/\/$/, "");
 }
 
 function getProviderPresets(provider: AiProvider): ModelPreset[] {
