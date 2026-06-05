@@ -86,7 +86,7 @@ const LEGACY_DEFAULT_SOURCES = [
   "Investing.com Economy|https://www.investing.com/rss/news_25.rss",
 ].join("\n");
 
-const DEFAULT_SOURCES = [
+const EXPANDED_DEFAULT_SOURCES = [
   "CoinDesk|https://www.coindesk.com/arc/outboundfeeds/rss",
   "Cointelegraph|https://cointelegraph.com/rss",
   "Decrypt|https://decrypt.co/feed",
@@ -116,6 +116,20 @@ const DEFAULT_SOURCES = [
   "Calculated Risk|https://www.calculatedriskblog.com/feeds/posts/default",
   "Wolf Street|https://wolfstreet.com/feed/",
   "FRED Blog|https://fredblog.stlouisfed.org/feed/",
+].join("\n");
+
+const DEFAULT_SOURCES = [
+  EXPANDED_DEFAULT_SOURCES,
+  [
+    "Yonhap Economy|https://www.yna.co.kr/rss/economy.xml",
+    "Donga Economy|https://rss.donga.com/economy.xml",
+    "Hankyung Economy|https://www.hankyung.com/feed/economy",
+    "Hankyung Finance|https://www.hankyung.com/feed/finance",
+    "Maeil Business Economy|https://www.mk.co.kr/rss/30100041/",
+    "ChosunBiz|https://biz.chosun.com/arc/outboundfeeds/rss/?outputType=xml",
+    "Newsis Economy|https://www.newsis.com/RSS/economy.xml",
+    "SBS Economy|https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=01&plink=RSSREADER",
+  ].join("\n"),
 ].join("\n");
 
 const DEFAULT_SETTINGS: TradirSettings = {
@@ -286,7 +300,10 @@ export default class TradirObsdianPlugin extends Plugin {
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     let changed = false;
-    if (normalizeSourceText(this.settings.sourceText) === normalizeSourceText(LEGACY_DEFAULT_SOURCES)) {
+    if (
+      normalizeSourceText(this.settings.sourceText) === normalizeSourceText(LEGACY_DEFAULT_SOURCES) ||
+      normalizeSourceText(this.settings.sourceText) === normalizeSourceText(EXPANDED_DEFAULT_SOURCES)
+    ) {
       this.settings.sourceText = DEFAULT_SOURCES;
       changed = true;
     }
@@ -2306,14 +2323,14 @@ function reconcileStoredCategory(storedCategory: string, inferredCategory: strin
 function inferCategory(text: string, source = ""): string {
   const lower = `${source} ${text}`.toLowerCase();
   if (/(sec press|securities and exchange commission|cftc|regulation|regulatory|policy|law|lawsuit|ban|approval|compliance|enforcement|sanction|규제|정책|제재|승인|금지|소송)/.test(lower)) return "regulation";
-  if (/(federal reserve|fed\b|fomc|ecb|european central bank|bank of england|boe\b|boj\b|bank of japan|central bank|central banks|powell|lagarde|bailey|연준|미연준|fomc|중앙은행|유럽중앙은행|영란은행|일본은행)/.test(lower)) return "central_bank";
-  if (/(fxstreet|forexlive|forex|foreign exchange|exchange rate|currency|currencies|dollar|dxy|yen|euro|sterling|pound|yuan|fx\b|환율|외환|달러|엔화|유로|파운드|위안)/.test(lower)) return "fx";
-  if (/(oilprice|oil|gold|silver|copper|commodity|commodities|wti|brent|crude|natural gas|lng|원유|유가|금값|금 가격|구리|원자재|천연가스)/.test(lower)) return "commodity";
+  if (/(federal reserve|fed\b|fomc|ecb|european central bank|bank of england|boe\b|boj\b|bank of japan|central bank|central banks|powell|lagarde|bailey|연준|미연준|fomc|중앙은행|유럽중앙은행|영란은행|일본은행|한국은행|한은|금통위|금융통화위원회)/.test(lower)) return "central_bank";
+  if (/(fxstreet|forexlive|forex|foreign exchange|exchange rate|currency|currencies|dollar|dxy|yen|euro|sterling|pound|yuan|fx\b|환율|외환|달러|엔화|유로|파운드|위안|원\/달러|원달러|달러\/원|달러원)/.test(lower)) return "fx";
+  if (/(oilprice|oil|gold|silver|copper|commodity|commodities|wti|brent|crude|natural gas|lng|원유|유가|금값|금 가격|금 시세|구리|원자재|천연가스|희토류)/.test(lower)) return "commodity";
   if (/(treasury|bond|bonds|yield|yields|rate cut|rate hike|interest rate|mortgage rate|gilts|bund|금리|채권|국채|수익률|기준금리|인하|인상)/.test(lower)) return "rates";
   if (/(bitcoin|crypto|coin|ethereum|btc|eth|defi|blockchain|암호화폐|코인|비트코인|이더리움)/.test(lower)) return "crypto";
   if (/(nasdaq|s&p|dow|stocks|equities|earnings|marketwatch|cnbc finance|미국 주식|나스닥|다우|실적)/.test(lower)) return "us_stock";
-  if (/(kospi|kosdaq|korea exchange|krx|한국 주식|코스피|코스닥)/.test(lower)) return "kr_stock";
-  if (/(inflation|cpi|ppi|gdp|jobs|payroll|recession|macro|economy|economic|fred|calculated risk|wolf street|인플레이션|물가|고용|경기|경제|침체|성장률)/.test(lower)) return "macro";
+  if (/(kospi|kosdaq|korea exchange|krx|hankyung finance|한국 주식|국내 증시|국내증시|증권|코스피|코스닥|상장|목표가|투자의견)/.test(lower)) return "kr_stock";
+  if (/(inflation|cpi|ppi|gdp|jobs|payroll|recession|macro|economy|economic|fred|calculated risk|wolf street|yonhap economy|donga economy|maeil business economy|chosunbiz|newsis economy|sbs economy|인플레이션|물가|고용|경기|경제|침체|성장률|수출|수입|무역수지|소비자물가)/.test(lower)) return "macro";
   return "trading_other";
 }
 
