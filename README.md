@@ -27,8 +27,8 @@ The build outputs `main.js` in the repository root for BRAT/release packaging.
 ## Settings
 
 - **Output folder**: Vault folder for imported notes.
-- **RSS sources**: One source per line as `Name|https://example.com/feed.xml`.
-- **Default article limit**: Maximum RSS items processed per command run.
+- **RSS sources**: One source per line as `Name|https://example.com/feed.xml`. The default set includes verified crypto, US market, macro, rates, FX, commodities, central bank, and regulation feeds.
+- **Default article limit**: Maximum RSS items processed per command run. The default is 500; higher values use more AI tokens when AI is enabled.
 - **AI provider**: `None`, `OpenAI`, `Anthropic Claude`, or `Google Gemini`.
 - **Recommended model preset**: Provider-specific model chooser with current list-price snapshots.
 - **AI model**: Provider model ID. Defaults are editable if your account supports another model.

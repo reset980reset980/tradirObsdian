@@ -79,17 +79,49 @@ interface ModelPreset {
   source: string;
 }
 
-const DEFAULT_SOURCES = [
+const LEGACY_DEFAULT_SOURCES = [
   "CoinDesk|https://www.coindesk.com/arc/outboundfeeds/rss",
   "Cointelegraph|https://cointelegraph.com/rss",
   "MarketWatch|https://feeds.marketwatch.com/marketwatch/topstories/",
   "Investing.com Economy|https://www.investing.com/rss/news_25.rss",
 ].join("\n");
 
+const DEFAULT_SOURCES = [
+  "CoinDesk|https://www.coindesk.com/arc/outboundfeeds/rss",
+  "Cointelegraph|https://cointelegraph.com/rss",
+  "Decrypt|https://decrypt.co/feed",
+  "CryptoSlate|https://cryptoslate.com/feed/",
+  "BeInCrypto|https://beincrypto.com/feed/",
+  "Blockworks|https://blockworks.co/feed",
+  "Bitcoin Magazine|https://bitcoinmagazine.com/.rss/full/",
+  "Watcher Guru|https://watcher.guru/news/feed",
+  "MarketWatch Top Stories|https://feeds.marketwatch.com/marketwatch/topstories/",
+  "MarketWatch MarketPulse|https://feeds.marketwatch.com/marketwatch/marketpulse/",
+  "CNBC Top News|https://www.cnbc.com/id/100003114/device/rss/rss.html",
+  "CNBC Finance|https://www.cnbc.com/id/10000664/device/rss/rss.html",
+  "Nasdaq Markets|https://www.nasdaq.com/feed/rssoutbound?category=Markets",
+  "Nasdaq Stocks|https://www.nasdaq.com/feed/rssoutbound?category=Stocks",
+  "Investing.com Economy|https://www.investing.com/rss/news_25.rss",
+  "Investing.com Stock Market|https://www.investing.com/rss/news_301.rss",
+  "Investing.com Commodities|https://www.investing.com/rss/news_11.rss",
+  "BBC Business|https://feeds.bbci.co.uk/news/business/rss.xml",
+  "FXStreet News|https://www.fxstreet.com/rss/news",
+  "ForexLive|https://www.forexlive.com/feed/",
+  "OilPrice|https://oilprice.com/rss/main",
+  "Finextra|https://www.finextra.com/rss/headlines.aspx",
+  "Federal Reserve|https://www.federalreserve.gov/feeds/press_all.xml",
+  "SEC Press Releases|https://www.sec.gov/news/pressreleases.rss",
+  "Bank of England News|https://www.bankofengland.co.uk/rss/news",
+  "ECB Press|https://www.ecb.europa.eu/rss/press.html",
+  "Calculated Risk|https://www.calculatedriskblog.com/feeds/posts/default",
+  "Wolf Street|https://wolfstreet.com/feed/",
+  "FRED Blog|https://fredblog.stlouisfed.org/feed/",
+].join("\n");
+
 const DEFAULT_SETTINGS: TradirSettings = {
   outputFolder: "Trading News Radar",
   sourceText: DEFAULT_SOURCES,
-  defaultLimit: 80,
+  defaultLimit: 500,
   historyLimit: 30000,
   aiProvider: "none",
   aiModel: "",
@@ -253,6 +285,14 @@ export default class TradirObsdianPlugin extends Plugin {
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     let changed = false;
+    if (normalizeSourceText(this.settings.sourceText) === normalizeSourceText(LEGACY_DEFAULT_SOURCES)) {
+      this.settings.sourceText = DEFAULT_SOURCES;
+      changed = true;
+    }
+    if (this.settings.defaultLimit === 80) {
+      this.settings.defaultLimit = DEFAULT_SETTINGS.defaultLimit;
+      changed = true;
+    }
     if (this.settings.sourceText.includes("https://finance.yahoo.com/news/rssindex")) {
       this.settings.sourceText = this.settings.sourceText.replace(
         /Yahoo Finance\|https:\/\/finance\.yahoo\.com\/news\/rssindex/g,
@@ -1655,6 +1695,10 @@ function parseSources(text: string): FeedSource[] {
       };
     })
     .filter((source) => /^https?:\/\//i.test(source.url));
+}
+
+function normalizeSourceText(text: string): string {
+  return parseSources(text).map((source) => `${source.name}|${source.url}`).join("\n");
 }
 
 function getProviderPresets(provider: AiProvider): ModelPreset[] {
