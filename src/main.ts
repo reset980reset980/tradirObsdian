@@ -131,6 +131,7 @@ const DEFAULT_SETTINGS: TradirSettings = {
 };
 
 const AI_ANALYSIS_BATCH_SIZE = 6;
+const CATEGORY_ORDER = ["crypto", "us_stock", "kr_stock", "macro", "rates", "fx", "commodity", "central_bank", "regulation", "trading_other"];
 
 const PROVIDER_DEFAULT_MODELS: Record<AiProvider, string> = {
   none: "",
@@ -602,12 +603,14 @@ export default class TradirObsdianPlugin extends Plugin {
     return baseline.map((article, index) => {
       const ai = byUrl.get(article.url) || parsed.find((candidate) => candidate.title === article.title) || parsed[index];
       if (!ai) return article;
+      const aiCategory = normalizeCategory(readAiString(ai, ["category", "sector", "topic", "카테고리", "분류", "주제", "섹터"]) || article.category);
+      const sourceCategory = inferCategory(`${article.title} ${article.originalTitle} ${article.summary} ${article.description}`, article.source);
 
       return {
         ...article,
         title: readAiString(ai, ["title", "translated_title", "translatedTitle", "korean_title", "koreanTitle", "headline", "제목", "번역제목", "한국어제목", "헤드라인"]) || article.title,
         summary: readAiString(ai, ["summary", "translated_summary", "translatedSummary", "korean_summary", "koreanSummary", "description", "요약", "번역요약", "한국어요약", "설명"]) || article.summary,
-        category: normalizeCategory(readAiString(ai, ["category", "sector", "topic", "카테고리", "분류", "주제", "섹터"]) || article.category),
+        category: reconcileStoredCategory(aiCategory, sourceCategory),
         importance: clampImportance(readAiValue(ai, ["importance", "importance_score", "importanceScore", "score", "rating", "중요도", "중요도점수", "점수", "등급"])),
         sentiment: normalizeSentiment(readAiValue(ai, ["sentiment", "sentiment_label", "sentimentLabel", "tone", "market_tone", "marketTone", "감성", "감정", "시장감성", "시장톤", "톤"])),
         tags: readAiTags(ai) || article.tags,
@@ -1376,7 +1379,7 @@ class TradirBriefingModal extends Modal {
 
     const filters = header.createDiv({ cls: "tradir-filter-row" });
     this.addCategoryFilter(filters, "all", `전체 (${sorted.length})`);
-    categoryCounts(sorted).forEach(([category, count]) => {
+    categoryCounts(sorted, true).forEach(([category, count]) => {
       this.addCategoryFilter(filters, category, `${categoryLabel(category)} (${count})`);
     });
     this.renderSearchControls(header, searched.length);
@@ -1599,13 +1602,25 @@ function addChartTooltip(container: HTMLElement, rows: Array<[string, string]>) 
   });
 }
 
-function categoryCounts(articles: AnalyzedArticle[]): Array<[string, number]> {
+function categoryCounts(articles: AnalyzedArticle[], includeEmpty = false): Array<[string, number]> {
   const counts = new Map<string, number>();
   articles.forEach((article) => {
     const key = article.category || "trading_other";
     counts.set(key, (counts.get(key) || 0) + 1);
   });
-  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  const entries = includeEmpty
+    ? CATEGORY_ORDER.map((category) => [category, counts.get(category) || 0] as [string, number])
+    : Array.from(counts.entries());
+  return entries.sort((a, b) => {
+    const countDiff = b[1] - a[1];
+    if (countDiff !== 0) return countDiff;
+    return categoryRank(a[0]) - categoryRank(b[0]);
+  });
+}
+
+function categoryRank(category: string): number {
+  const index = CATEGORY_ORDER.indexOf(category);
+  return index >= 0 ? index : CATEGORY_ORDER.length;
 }
 
 function formatPercent(count: number, total: number): { value: number; label: string } {
@@ -1801,13 +1816,13 @@ function attrOf(node: Element, selector: string, attr: string): string {
 }
 
 function fallbackAnalysis(item: FeedItem): AnalyzedArticle {
-  const text = `${item.title} ${item.description}`;
+  const text = `${item.source} ${item.title} ${item.description}`;
   return {
     ...item,
     originalTitle: item.title,
     originalDescription: item.description,
     summary: item.description || "RSS item collected without AI analysis.",
-    category: inferCategory(text),
+    category: inferCategory(text, item.source),
     importance: inferImportance(text),
     sentiment: inferSentiment(text),
     tags: buildTags(text),
@@ -1840,7 +1855,7 @@ function buildAnalysisPrompt(items: FeedItem[], language: string): string {
     `The articles array must contain exactly ${compact.length} items in the same order as the input items.`,
     "Each articles item must include: url, title, summary, category, importance, sentiment, tags.",
     `Translate title and summary into ${language}. Preserve the original source meaning and do not leave title in English unless it is a company, ticker, or product name.`,
-    "category must be one exact enum string: crypto, us_stock, kr_stock, macro, rates, fx, commodity, regulation, trading_other.",
+    "category must be one exact enum string: crypto, us_stock, kr_stock, macro, rates, fx, commodity, central_bank, regulation, trading_other.",
     "importance must be an integer from 1 to 5. sentiment must be one exact English enum string: positive, neutral, negative.",
     "",
     JSON.stringify(compact),
@@ -2027,6 +2042,7 @@ function categoryLabel(category: string): string {
     rates: "금리/채권",
     fx: "환율/외환",
     commodity: "원자재",
+    central_bank: "중앙은행",
     regulation: "규제/정책",
     trading_other: "기타",
   };
@@ -2043,6 +2059,7 @@ function categoryColor(category: string): string {
     rates: "var(--color-cyan, #39c5cf)",
     fx: "var(--color-orange, #f59e0b)",
     commodity: "var(--color-red, #f05252)",
+    central_bank: "var(--color-cyan, #39c5cf)",
     regulation: "var(--color-pink, #ec4899)",
     trading_other: "var(--text-muted)",
   };
@@ -2165,14 +2182,16 @@ function parseStoredArticle(text: string, file: TFile): AnalyzedArticle | null {
 
   const title = cleanText(readYamlScalar(yaml, "title") || file.basename);
   const source = cleanText(readYamlScalar(yaml, "source") || "Stored note");
-  const category = cleanText(readYamlScalar(yaml, "category") || inferCategory(text));
+  const storedCategory = cleanText(readYamlScalar(yaml, "category"));
   const url = cleanText(readYamlScalar(yaml, "url"));
   const publishedAt = cleanText(readYamlScalar(yaml, "published_at") || new Date(file.stat.mtime).toISOString());
   const originalTitle = cleanText(readYamlScalar(yaml, "original_title") || extractStoredSection(text, "원문 제목") || title);
   const summary = cleanText(extractStoredSummary(text) || extractStoredSection(text, "RSS 발췌") || title);
   const description = cleanText(extractStoredSection(text, "RSS 발췌") || summary);
+  const analysisText = `${source} ${title} ${originalTitle} ${summary} ${description}`;
+  const inferredCategory = inferCategory(analysisText, source);
+  const category = reconcileStoredCategory(storedCategory, inferredCategory);
   const tags = parseYamlTags(readYamlRaw(yaml, "tags")).filter((tag) => !["trading-news", category].includes(tag)).slice(0, 8);
-  const analysisText = `${title} ${originalTitle} ${summary} ${description}`;
   const restoredSentiment = normalizeSentiment(readYamlScalar(yaml, "sentiment"));
   const inferredSentiment = inferSentiment(analysisText);
   const restoredImportance = clampImportance(readYamlScalar(yaml, "importance"));
@@ -2275,14 +2294,26 @@ function cleanText(input: unknown): string {
     .trim();
 }
 
-function inferCategory(text: string): string {
-  const lower = text.toLowerCase();
-  if (/(bitcoin|crypto|coin|ethereum|btc|eth|defi|blockchain)/.test(lower)) return "crypto";
-  if (/(fed|inflation|gdp|jobs|recession|macro|economy)/.test(lower)) return "macro";
-  if (/(rate|yield|bond|treasury|fomc)/.test(lower)) return "rates";
-  if (/(oil|gold|commodity|wti|brent|copper)/.test(lower)) return "commodity";
-  if (/(dollar|yen|euro|fx|currency|forex)/.test(lower)) return "fx";
-  if (/(sec|regulation|policy|law|ban|approval)/.test(lower)) return "regulation";
+function reconcileStoredCategory(storedCategory: string, inferredCategory: string): string {
+  const normalized = normalizeCategory(storedCategory);
+  if (!storedCategory || normalized === "trading_other") return inferredCategory;
+  if (normalized === "macro" && ["rates", "fx", "commodity", "central_bank", "regulation"].includes(inferredCategory)) {
+    return inferredCategory;
+  }
+  return normalized;
+}
+
+function inferCategory(text: string, source = ""): string {
+  const lower = `${source} ${text}`.toLowerCase();
+  if (/(sec press|securities and exchange commission|cftc|regulation|regulatory|policy|law|lawsuit|ban|approval|compliance|enforcement|sanction|규제|정책|제재|승인|금지|소송)/.test(lower)) return "regulation";
+  if (/(federal reserve|fed\b|fomc|ecb|european central bank|bank of england|boe\b|boj\b|bank of japan|central bank|central banks|powell|lagarde|bailey|연준|미연준|fomc|중앙은행|유럽중앙은행|영란은행|일본은행)/.test(lower)) return "central_bank";
+  if (/(fxstreet|forexlive|forex|foreign exchange|exchange rate|currency|currencies|dollar|dxy|yen|euro|sterling|pound|yuan|fx\b|환율|외환|달러|엔화|유로|파운드|위안)/.test(lower)) return "fx";
+  if (/(oilprice|oil|gold|silver|copper|commodity|commodities|wti|brent|crude|natural gas|lng|원유|유가|금값|금 가격|구리|원자재|천연가스)/.test(lower)) return "commodity";
+  if (/(treasury|bond|bonds|yield|yields|rate cut|rate hike|interest rate|mortgage rate|gilts|bund|금리|채권|국채|수익률|기준금리|인하|인상)/.test(lower)) return "rates";
+  if (/(bitcoin|crypto|coin|ethereum|btc|eth|defi|blockchain|암호화폐|코인|비트코인|이더리움)/.test(lower)) return "crypto";
+  if (/(nasdaq|s&p|dow|stocks|equities|earnings|marketwatch|cnbc finance|미국 주식|나스닥|다우|실적)/.test(lower)) return "us_stock";
+  if (/(kospi|kosdaq|korea exchange|krx|한국 주식|코스피|코스닥)/.test(lower)) return "kr_stock";
+  if (/(inflation|cpi|ppi|gdp|jobs|payroll|recession|macro|economy|economic|fred|calculated risk|wolf street|인플레이션|물가|고용|경기|경제|침체|성장률)/.test(lower)) return "macro";
   return "trading_other";
 }
 
@@ -2352,6 +2383,19 @@ function normalizeCategory(value: unknown): string {
     commodity: "commodity",
     commodities: "commodity",
     "원자재": "commodity",
+    central_bank: "central_bank",
+    central_banks: "central_bank",
+    centralbank: "central_bank",
+    fed: "central_bank",
+    federal_reserve: "central_bank",
+    ecb: "central_bank",
+    boe: "central_bank",
+    boj: "central_bank",
+    "중앙은행": "central_bank",
+    "연준": "central_bank",
+    "미연준": "central_bank",
+    "유럽중앙은행": "central_bank",
+    "영란은행": "central_bank",
     regulation: "regulation",
     policy: "regulation",
     "규제": "regulation",

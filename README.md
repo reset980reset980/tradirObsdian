@@ -28,6 +28,7 @@ The build outputs `main.js` in the repository root for BRAT/release packaging.
 
 - **Output folder**: Vault folder for imported notes.
 - **RSS sources**: One source per line as `Name|https://example.com/feed.xml`. The default set includes verified crypto, US market, macro, rates, FX, commodities, central bank, and regulation feeds.
+- **Report categories**: Dashboard and feed filters include crypto, US/Korean stocks, macro, rates/bonds, FX, commodities, central banks, regulation/policy, and other.
 - **Default article limit**: Maximum RSS items processed per command run. The default is 500; higher values use more AI tokens when AI is enabled.
 - **AI provider**: `None`, `OpenAI`, `Anthropic Claude`, or `Google Gemini`.
 - **Recommended model preset**: Provider-specific model chooser with current list-price snapshots.
